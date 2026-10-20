@@ -1,0 +1,1 @@
+{"public_routes":["/health","/healthz","/login"],"exclude":["tests/","examples/","**/*.min.js"]}
