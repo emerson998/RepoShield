@@ -7,6 +7,43 @@ consultiva opcional com **Claude CLI ou Codex CLI**.
 > Versão 0.2.0 · Auditoria assistida de segurança. Resultados são hipóteses com evidências, não
 > vulnerabilidades confirmadas. Não substitui revisão humana ou testes de segurança.
 
+## Um comando → plano de ajustes em Markdown
+
+Com o RepoShield instalado, execute na raiz da aplicação:
+
+```bash
+reposhield scan .
+```
+
+O comando executa todas as regras estáticas disponíveis e salva automaticamente
+**`.reposhield/security-review.md`** dentro do projeto analisado. Não precisa abrir
+a interface. Cada achado informa arquivo/linha, severidade, confiança, evidência,
+**por que ajustar**, **como ajustar** e **como validar**. Também inclui prioridades,
+checklist manual, erros e limites da cobertura. O arquivo é atualizado a cada scan;
+use `--output` se quiser manter relatórios separados.
+
+Para complementar o mesmo relatório com o CLI de IA escolhido:
+
+```bash
+reposhield scan . --provider claude --consent
+# ou
+reposhield scan . --provider codex --consent
+```
+
+Para incluir a matriz local já configurada, adicione `--runtime`. Sem esse flag,
+não há requisições HTTP. A varredura executa todos os detectores disponíveis para
+os arquivos suportados, mas não constitui uma auditoria completa de toda stack.
+Controles não verificáveis automaticamente são explicitados no checklist.
+
+```bash
+reposhield scan ./minha-api --output ./relatorios/seguranca.md
+reposhield scan . --stdout  # saída no terminal, sem arquivo automático
+```
+
+Se a IA falhar, o relatório estático ainda é salvo, registra a etapa incompleta e
+o comando retorna código 2. Achados que atingem `--fail-on` também preservam o
+arquivo antes de retornar código 1. Um exemplo está em [docs/EXAMPLE_REPORT.md](docs/EXAMPLE_REPORT.md).
+
 ## Começar
 
 Requisitos: Python 3.11+, Node.js 22+ e npm. Os CLIs de IA são opcionais.
@@ -69,7 +106,7 @@ São enviados até 80 achados redigidos, com um orçamento de 48.000 caracteres,
 para gerar recomendações em português. Não recebe o código inteiro, não confirma
 explorabilidade e não aplica patches. Timeout: 180 segundos. CLI inexistente,
 erro de autenticação ou incompatibilidade de versão aparecem no relatório da web;
-a análise estática continua disponível. A CLI encerra com erro se a revisão falhar.
+a análise estática continua disponível. A CLI salva o relatório local antes de encerrar com erro se a revisão falhar.
 
 A redação reduz exposição de segredos reconhecidos, mas não garante anonimização.
 Os CLIs podem usar serviços externos e configurações locais. A seleção exige

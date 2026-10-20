@@ -143,12 +143,5 @@ def sarif(report):
             'locations':[{'physicalLocation':{'artifactLocation':{'uri':__import__('urllib.parse',fromlist=['quote']).quote(f['file'])},'region':{'startLine':f['line']}}}]} for f in report['findings']]}]}
 
 def markdown(report):
-    out = [f"# RepoShield — {report['project']}",f"Arquivos analisados: {report['coverage']['files']}", '']
-    for f in report['findings']:
-        out += [f"## {f['severity'].upper()} · {f['title']}",f"`{f['file']}:{f['line']}` · confiança {f['confidence']}",f['recommendation'],f"Categoria: {f.get('category','n/a')} · {f.get('cwe','')} · origem: {f['source']}",'Evidência: '+f['evidence'], 'Validação: '+f.get('validation','Revisão manual.'),'']
-    out += ['## Checklist de segurança', *[f"- {c['title']}: {c['status']} — {c['validation']}" for c in report.get('controls',[])], '']
-    if report.get('runtime'):
-        out += ['## Matriz runtime', *[f"- {r['case']} {r['path']}: esperado {r['expected']}, recebido {r['actual']} ({'corresponde' if r['matched'] else 'divergente'})" for r in report['runtime']['results']], '']
-    if report.get('ai'): out += ['## Revisão por IA', report['ai']['text'], '']
-    out += ['## Limitações', *['- '+x for x in report['limitations']]]
-    return '\n'.join(out)
+    from .report import markdown as render
+    return render(report)
