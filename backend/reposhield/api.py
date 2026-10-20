@@ -12,7 +12,7 @@ from .scanner import scan, sarif, markdown
 from .providers import available, review
 from . import store
 
-app=FastAPI(title='RepoShield',version='0.1.0',docs_url=None,redoc_url=None,openapi_url=None)
+app=FastAPI(title='RepoShield',version='0.2.0',docs_url=None,redoc_url=None,openapi_url=None)
 TOKEN=os.environ.get('REPOSHIELD_TOKEN') or secrets.token_urlsafe(32)
 ROOT=Path(os.environ.get('REPOSHIELD_ROOT',os.getcwd())).expanduser().resolve()
 lock=threading.Lock()
@@ -31,6 +31,7 @@ class ScanRequest(BaseModel):
     path: str=Field(min_length=1,max_length=2048)
     provider: str='none'
     consent: bool=False
+    runtime: bool=False
 
 @app.get('/api/health')
 def health(): return {'status':'ok'}
@@ -41,9 +42,9 @@ def settings(): return {'root':str(ROOT),'providers':available()}
 @app.get('/api/scans',dependencies=[Depends(auth)])
 def history(): return store.history()
 
-def work(identifier,path,provider):
+def work(identifier,path,provider,runtime_enabled):
     try:
-        report=scan(path)
+        report=scan(path,runtime_enabled=runtime_enabled)
         if provider!='none':
             try: report['ai']=review(report,provider)
             except ValueError as exc: report['errors'].append(str(exc))
@@ -65,7 +66,7 @@ def create(req: ScanRequest):
         identifier=uuid.uuid4().hex
         jobs.clear()
         jobs[identifier]={'status':'running'}
-    pool.submit(work,identifier,path,req.provider)
+    pool.submit(work,identifier,path,req.provider,req.runtime)
     return {'id':identifier,'status':'running'}
 
 @app.get('/api/scans/{identifier}',dependencies=[Depends(auth)])

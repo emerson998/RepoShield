@@ -4,7 +4,7 @@
 FastAPI e CLI. Inventaria endpoints, procura padrões de risco e oferece revisão
 consultiva opcional com **Claude CLI ou Codex CLI**.
 
-> Versão 0.1.0 · MVP funcional. Resultados são hipóteses com evidências, não
+> Versão 0.2.0 · Auditoria assistida de segurança. Resultados são hipóteses com evidências, não
 > vulnerabilidades confirmadas. Não substitui revisão humana ou testes de segurança.
 
 ## Começar
@@ -35,9 +35,9 @@ Para experimentar a fixture insegura: `reposhield serve --root .` e analise
 
 - Interface responsiva com filtros de severidade e busca por regra/arquivo.
 - Evidências com localização, confiança e recomendação.
-- Inventário FastAPI/Flask por AST e inventário básico Express por padrões.
+- Inventário FastAPI/Flask por AST, herança local de dependências/prefixos, Express por padrões e OpenAPI 3 JSON.
 - Revisão de autenticação aparente, rotas administrativas e autorização por objeto.
-- Padrões de segredos, TLS desabilitado, shell, debug e JWT sem validação.
+- 42 regras: senhas, JWT, cookies, login, recuperação, injeções, SSRF, arquivos, CORS e outros.
 - Histórico local em SQLite e exportações JSON, Markdown e SARIF 2.1.0.
 - Jobs em background, uma análise por vez e revisão opcional por IA.
 - Exclusões, `.gitignore`, limites de arquivos, tamanho e bytes.
@@ -66,7 +66,7 @@ O painel detecta os executáveis pelo PATH; o login é feito no terminal, fora d
 A integração usa `claude -p` com ferramentas desabilitadas ou `codex exec` com
 sandbox read-only. O processo roda em diretório temporário, sem montar o projeto.
 São enviados até 80 achados redigidos, com um orçamento de 48.000 caracteres,
-para gerar recomendações em português. Não recebe o código inteiro, não valida
+para gerar recomendações em português. Não recebe o código inteiro, não confirma
 explorabilidade e não aplica patches. Timeout: 180 segundos. CLI inexistente,
 erro de autenticação ou incompatibilidade de versão aparecem no relatório da web;
 a análise estática continua disponível. A CLI encerra com erro se a revisão falhar.
@@ -86,7 +86,7 @@ Crie `.reposhield.json` **no projeto alvo**:
 }
 ```
 
-Rotas públicas são declaradas pelo path do decorator, antes de prefixos de router.
+Rotas públicas são declaradas pelo path do decorator, antes de prefixos de router na versão 0.1; na versão 0.2, use o path resolvido (quando houver herança local).
 A lista substitui os padrões `/health` e `/healthz`. `.gitignore` raiz é respeitado;
 arquivos de ignore aninhados ainda não são processados.
 
@@ -105,16 +105,17 @@ sessão), `REPOSHIELD_DB` (caminho do SQLite; padrão `~/.reposhield/history.db`
 `Depends` pode executar algo que não autentica ninguém. Middleware e dependências
 no app/router podem proteger uma rota sem aparecer na função. As regras RS100,
 RS101 e RS102 têm confiança baixa por esse motivo. RS102 marca revisão de
-propriedade/tenant, sem afirmar que existe IDOR. Prefixos e montagem de routers não
-são reconstruídos. Express recebe inventário básico; análise de guards JS/TS
-está no roadmap. O scanner nunca faz requisições aos endpoints.
+propriedade/tenant, sem afirmar que existe IDOR. Prefixos e dependências de app/router são reconstruídos quando a definição e montagem estão no mesmo arquivo. Imports e middleware arbitrário não são resolvidos. Express recebe indícios de guards em snippets limitados. Requisições aos endpoints só ocorrem com runtime ativado explicitamente.
 
 ## Arquitetura
 
 ```text
 frontend/                 React + Vite + lucide-react
 backend/reposhield/
-  scanner.py              Motor estático compartilhado
+  scanner.py              Motor e exportação compartilhados
+  audit.py                Regras e checklist de 24 áreas
+  routes.py               Extração e herança de endpoints
+  runtime.py              Matriz GET local opt-in
   api.py                  API local e jobs em background
   cli.py                  Terminal, exportação e limiares de CI
   providers.py            Adaptadores CLI para revisão consultiva
@@ -153,12 +154,83 @@ O histórico lista as 50 análises mais recentes; não há política de retenç�
 A API é uma ferramenta pessoal local, não um serviço multiusuário.
 
 Próximas entregas: integração com Semgrep/Gitleaks e auditoria de dependências,
-resolução de routers e middleware, falsos positivos com justificativa, comparação
-de scans, testes dinâmicos autorizados e correções em branches com diffs revisáveis.
-Esses recursos **não estão implementados nesta versão**. Não há score de segurança
+resolução entre arquivos e middleware, falsos positivos com justificativa, comparação
+de scans, testes dinâmicos de mutações e correções em branches com diffs revisáveis.
+Os itens deste roadmap **não estão implementados nesta versão**; há runtime GET local e resolução local de routers disponíveis. Não há score de segurança
 artificial ou promessa de detectar todas as vulnerabilidades.
 
 ## Contribuir e licença
 
 Veja [CONTRIBUTING.md](CONTRIBUTING.md) e [SECURITY.md](SECURITY.md).
 Licença [MIT](LICENSE).
+
+
+## Auditoria de aplicação nova (v0.2)
+
+1. Execute o scan estático antes de conectar a aplicação a dados reais.
+2. Declare rotas públicas intencionais. Login público ainda recebe verificações de abuso.
+3. Investigue os achados por severidade, evidência, CWE e orientação de validação.
+4. Abra o **Checklist**: 24 áreas incluem MFA, OAuth, sessões, autorização por objeto,
+   tenant, recuperação, logs, arquivos e lógica de negócio.
+5. Use uma instância local com dados sintéticos para verificar o contrato de acesso.
+6. Faça revisão manual e testes específicos nas áreas sem evidência automatizada.
+
+Estados do checklist: `findings` (achados), `indicator_only` (indício sintático) e
+`manual_required` (exige revisão). Nenhum significa aprovado. A cobertura de regras
+não é certificação OWASP nem uma contagem de vulnerabilidades confirmadas.
+
+### Matriz de acesso em runtime — ativação explícita
+
+Configure `.reposhield.json` no projeto alvo (copie apenas os casos relevantes):
+
+```json
+{
+  "public_routes": ["/health", "/login"],
+  "runtime": {
+    "base_url": "http://127.0.0.1:8000",
+    "cases": [
+      {"path": "/health", "expected_status": [200]},
+      {"path": "/admin/users", "expected_status": [401, 403]},
+      {"path": "/admin/users", "token_env": "REPOSHIELD_TEST_USER", "expected_status": [403]},
+      {"path": "/admin/users", "token_env": "REPOSHIELD_TEST_ADMIN", "expected_status": [200]},
+      {"path": "/orders/other-user-order", "token_env": "REPOSHIELD_TEST_USER", "expected_status": [403, 404]}
+    ]
+  }
+}
+```
+
+Os identificadores de objetos devem existir e pertencer às contas sintéticas
+apropriadas. Um 404 não comprova autorização se o objeto não existir. Declare os
+status esperados conforme sua política. Tokens vêm exclusivamente de variáveis
+`REPOSHIELD_TEST_*` definidas antes de iniciar o app; nunca os salve no JSON.
+
+```bash
+# Defina os tokens sintéticos no ambiente da sua sessão sem incluí-los no repositório.
+reposhield scan ./minha-api --runtime --format json --output report.json
+# Ou ative "Autorizar GETs locais" na interface antes do scan.
+```
+
+Sem `--runtime` ou o checkbox, nenhuma requisição é feita. O plano aceita de 1 a
+20 GETs com IP literal de loopback, timeout de 5 segundos por caso, sem redirects
+ou armazenamento de corpo. Não aponte para GETs com efeitos colaterais. Apenas
+Bearer tokens são suportados nessa versão. São comparados status e atributos de
+cabeçalhos/cookies; não há login automático, força bruta ou criação de contas.
+
+As verificações de CSP aplicam-se a HTML. Cookies sem flags geram revisão, pois um
+cookie pode não autenticar sessão e Secure depende do ambiente HTTPS. Redirecionar
+para login pode ser correto para uma página, mas não para uma API; configure o
+contrato esperado. O relatório registra a divergência, sem inferir automaticamente
+que dados protegidos foram expostos.
+
+### Catálogo e referências
+
+Veja [docs/RULES.md](docs/RULES.md) para todas as regras e
+[docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) para o roteiro de validação.
+O catálogo usa CWE e recomendações inspiradas nas fontes primárias:
+
+- [OWASP API Security Top 10](https://api-security.owasp.org/editions/2023/en/0x11-t10/)
+- [OWASP Authentication Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html)
+- [OWASP Session Management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)
+- [OWASP Password Storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
+
+Essas referências organizam a revisão, sem alegação de cobertura integral dos padrões.

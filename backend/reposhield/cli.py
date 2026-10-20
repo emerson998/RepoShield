@@ -13,6 +13,7 @@ def main():
     s.add_argument('--consent',action='store_true',help='Autoriza envio dos achados redigidos ao provedor')
     s.add_argument('--format',choices=['json','sarif','markdown'],default='markdown')
     s.add_argument('--output',type=Path)
+    s.add_argument('--runtime',action='store_true',help='Autoriza GETs da matriz runtime local configurada')
     s.add_argument('--fail-on',choices=['low','medium','high','critical'])
     serve=sub.add_parser('serve'); serve.add_argument('--root',default='.')
     args=parser.parse_args()
@@ -25,7 +26,7 @@ def main():
         return
     if args.provider!='none' and not args.consent: parser.error('Use --consent para enviar os achados ao provedor.')
     try:
-        report=scan(args.path)
+        report=scan(args.path,runtime_enabled=args.runtime)
         if args.provider!='none':
             from .providers import review
             report['ai']=review(report,args.provider)
