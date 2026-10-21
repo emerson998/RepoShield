@@ -24,6 +24,7 @@ REASONS = {
  'openapi':'Um contrato de autenticação ambíguo ou inválido pode gerar clientes e testes incompatíveis com a política real do serviço.',
 }
 RULE_REASONS = {
+ 'RS209':'Tokens em Web Storage podem ser lidos por JavaScript da mesma origem, inclusive em um ataque XSS. Um token fictício em teste não comprova exposição em produção.',
  'RS100':'O analisador não encontrou um guard de autenticação reconhecido nesta rota. Isso exige revisão: middleware ou proteção herdada podem existir fora do alcance do scan.',
  'RS101':'Uma função administrativa deve verificar privilégios além da identidade; sem essa decisão, um usuário comum pode executar ações privilegiadas.',
  'RS102':'Um identificador de objeto pode ser alterado pelo cliente. O servidor deve verificar propriedade, tenant e permissões; esta regra não confirma uma falha IDOR.',
@@ -56,12 +57,21 @@ def markdown(report):
         '3. Aplique cada ajuste em branch e valide com testes de regressão.',
         '4. Revise os controles manuais e execute novamente o RepoShield.', '',
         '## Ajustes por achado','']
+    verdict = report.get('verdict')
+    if verdict:
+        section = ['## Veredito', '', '**'+text(verdict['label'])+'**', '',
+                   'Escopo: '+text(verdict['scope']), '',
+                   f"Contratos HTTP: {verdict['checks_passed']}/{verdict['checks_executed']} corresponderam ao esperado.", '',
+                   *['- '+text(reason) for reason in verdict['reasons']], '',
+                   '**Fora da aprovação:**', *['- '+text(reason) for reason in verdict['exclusions']], '']
+        out[4:4] = section
     if not findings: out += ['Nenhum achado pelas regras executadas. Ainda é necessário concluir o checklist manual.','']
     for i,f in enumerate(findings,1):
         reason=RULE_REASONS.get(f['rule'],REASONS.get(f.get('category'),'Este padrão exige revisão para confirmar se viola a política de segurança da aplicação.'))
         out += [f"### {i}. {text(f['severity'].upper())} · {text(f['title'])}", '',
             f"- Regra: {text(f['rule'])} · Referência: {text(f.get('cwe','não informada'))}.",
             f"- Local: {text(f['file'])}, linha {f['line']}.",
+            f"- Contexto: {text(f.get('context','não classificado'))}. {text(f.get('context_note',''))}",
             f"- Confiança: {text(f['confidence'])} · Origem: {text(f['source'])}.",
             '', '**O que foi encontrado**', '', '> '+text(f['evidence']), '',
             '**Por que ajustar ou investigar**', '', reason, '',
@@ -84,6 +94,12 @@ def markdown(report):
         for r in report['runtime']['results']:
             out.append(f"| {text(r['case'])} | {text(r['path'])} | {text(r['identity'])} | {text(r['expected'])} | {r['actual']} | {'Corresponde' if r['matched'] else 'Divergente'} |")
         out += ['', 'Correspondência de status não comprova isolamento do corpo ou ausência de efeitos colaterais.','']
+    if report.get('dependencies'):
+        deps = report['dependencies']
+        out += ['## Dependências npm — OSV', '', 'Estado: '+text(deps['status']), text(deps['scope']),
+                f"Pacotes consultados: {deps['packages']}", '',
+                *['- '+text(v['package']+'@'+v['version']+' — '+v['advisory']) for v in deps['vulnerabilities']],
+                *['- '+text(e) for e in deps['errors']], '']
     if report.get('ai'):
         out += ['## Revisão consultiva por IA','', 'Sugestões adicionais; não substituem a confirmação dos achados.','']
         out += ['> '+text(line) for line in report['ai']['text'].splitlines()]
@@ -92,3 +108,4 @@ def markdown(report):
         out += ['## Etapas incompletas ou erros','', *['- '+text(e) for e in report['errors']], '']
     out += ['## Limitações da varredura','', *['- '+text(x) for x in report['limitations']], '']
     return '\n'.join(out)
+

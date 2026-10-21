@@ -11,8 +11,9 @@ from pydantic import BaseModel, Field
 from .scanner import scan, sarif, markdown
 from .providers import available, review
 from . import store
+from .assurance import evaluate
 
-app=FastAPI(title='RepoShield',version='0.2.0',docs_url=None,redoc_url=None,openapi_url=None)
+app=FastAPI(title='RepoShield',version='0.3.0',docs_url=None,redoc_url=None,openapi_url=None)
 TOKEN=os.environ.get('REPOSHIELD_TOKEN') or secrets.token_urlsafe(32)
 ROOT=Path(os.environ.get('REPOSHIELD_ROOT',os.getcwd())).expanduser().resolve()
 lock=threading.Lock()
@@ -32,6 +33,7 @@ class ScanRequest(BaseModel):
     provider: str='none'
     consent: bool=False
     runtime: bool=False
+    dependencies: bool=False
 
 @app.get('/api/health')
 def health(): return {'status':'ok'}
@@ -42,12 +44,13 @@ def settings(): return {'root':str(ROOT),'providers':available()}
 @app.get('/api/scans',dependencies=[Depends(auth)])
 def history(): return store.history()
 
-def work(identifier,path,provider,runtime_enabled):
+def work(identifier,path,provider,runtime_enabled,dependencies_enabled=False):
     try:
-        report=scan(path,runtime_enabled=runtime_enabled)
+        report=scan(path,runtime_enabled=runtime_enabled,dependencies_enabled=dependencies_enabled)
         if provider!='none':
             try: report['ai']=review(report,provider)
             except ValueError as exc: report['errors'].append(str(exc))
+        report['verdict']=evaluate(report)
         store.save(identifier,report)
         with lock: jobs[identifier]={'status':'completed','report':report}
     except Exception as exc:
@@ -66,7 +69,7 @@ def create(req: ScanRequest):
         identifier=uuid.uuid4().hex
         jobs.clear()
         jobs[identifier]={'status':'running'}
-    pool.submit(work,identifier,path,req.provider,req.runtime)
+    pool.submit(work,identifier,path,req.provider,req.runtime,req.dependencies)
     return {'id':identifier,'status':'running'}
 
 @app.get('/api/scans/{identifier}',dependencies=[Depends(auth)])
@@ -88,3 +91,4 @@ def export(identifier: str,format: str='json'):
 
 frontend=Path(__file__).resolve().parents[2]/'frontend'/'dist'
 if frontend.is_dir(): app.mount('/',StaticFiles(directory=frontend,html=True),name='frontend')
+

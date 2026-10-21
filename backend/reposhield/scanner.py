@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 import pathspec
+from . import assurance
 from . import audit
 from . import runtime
 from .routes import python_routes, js_routes
@@ -46,7 +47,7 @@ def finding(rule, file, line, evidence, confidence='medium'):
                 confidence=confidence, status='needs_review', source='reposhield-static',
                 recommendation=recommendation, **meta)
 
-def scan(project, *, runtime_enabled=False):
+def scan(project, *, runtime_enabled=False, dependencies_enabled=False):
     root = Path(project).expanduser().resolve()
     if not root.is_dir(): raise ValueError('Diretório do projeto não existe.')
     config = {}
@@ -125,18 +126,25 @@ def scan(project, *, runtime_enabled=False):
     levels={'critical':0,'high':1,'medium':2,'low':3}
     findings.sort(key=lambda f:(levels[f['severity']],f['file'],f['line'],f['rule']))
     checklist = audit.controls(findings,indicators,endpoints)
-    return dict(version=2,runtime=runtime_report,engine_version='0.2.0',controls=checklist,summary=dict(
+    assurance.classify(findings)
+    report = dict(version=3,runtime=runtime_report,engine_version='0.3.0',controls=checklist,summary=dict(
         rules=len(RULES),controls=len(checklist),findings=len(findings),
         requires_manual=sum(c['status']=='manual_required' for c in checklist)),created_at=datetime.now(timezone.utc).isoformat(),project=root.name,
         findings=findings,endpoints=endpoints,coverage=dict(files=scanned,skipped=skipped,bytes=total,partial=partial),
         errors=errors,ai=None,limitations=['Análise heurística; não confirma explorabilidade.',
         'Python: decorators e herança local de routers. JavaScript: snippets Express heurísticos. OpenAPI: contratos 3.x JSON locais.',
         'Não resolve imports, middleware arbitrário ou semântica de guards; ausência de achados não prova segurança.',
-        'Runtime opcional só verifica GETs explícitos locais. Sem auditoria de CVEs, brute force ou correção automática.'])
+        'Runtime opcional só verifica GETs explícitos locais. OSV opcional limitado ao lock npm raiz; sem brute force ou correção automática.'])
+
+    from .dependencies import check
+    report['dependencies'] = check(root) if dependencies_enabled else None
+    report['verdict'] = assurance.evaluate(report)
+    return report
 
 def sarif(report):
     return {'version':'2.1.0','$schema':'https://json.schemastore.org/sarif-2.1.0.json','runs':[{
-        'tool':{'driver':{'name':'RepoShield','version':'0.2.0','rules':[{'id':k,'shortDescription':{'text':v[1]},'help':{'text':v[2]}} for k,v in RULES.items()]}},
+        'properties':{'verdict':report.get('verdict'),'dependencies':report.get('dependencies')},
+        'tool':{'driver':{'name':'RepoShield','version':'0.3.0','rules':[{'id':k,'shortDescription':{'text':v[1]},'help':{'text':v[2]}} for k,v in RULES.items()]}},
         'results':[{'ruleId':f['rule'],'level':'error' if f['severity'] in {'critical','high'} else 'warning',
             'message':{'text':f['title']+' — '+f['recommendation']},
             'properties':{'confidence':f['confidence'],'category':f.get('category'),'cwe':f.get('cwe')},
@@ -145,3 +153,4 @@ def sarif(report):
 def markdown(report):
     from .report import markdown as render
     return render(report)
+
