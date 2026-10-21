@@ -4,7 +4,7 @@
 FastAPI e CLI. Inventaria endpoints, procura padrões de risco e oferece revisão
 consultiva opcional com **Claude CLI ou Codex CLI**.
 
-> Versão 0.2.0 · Auditoria assistida de segurança. Resultados são hipóteses com evidências, não
+> Versão 0.3.0 · Auditoria assistida de segurança. Resultados são hipóteses com evidências, não
 > vulnerabilidades confirmadas. Não substitui revisão humana ou testes de segurança.
 
 ## Um comando → plano de ajustes em Markdown
@@ -190,7 +190,7 @@ binários, diretórios de build, dependências e links simbólicos são excluíd
 O histórico lista as 50 análises mais recentes; não há política de retenção automática.
 A API é uma ferramenta pessoal local, não um serviço multiusuário.
 
-Próximas entregas: integração com Semgrep/Gitleaks e auditoria de dependências,
+Próximas entregas: integração com Semgrep/Gitleaks e auditoria de dependências de outros ecossistemas,
 resolução entre arquivos e middleware, falsos positivos com justificativa, comparação
 de scans, testes dinâmicos de mutações e correções em branches com diffs revisáveis.
 Os itens deste roadmap **não estão implementados nesta versão**; há runtime GET local e resolução local de routers disponíveis. Não há score de segurança
@@ -271,3 +271,48 @@ O catálogo usa CWE e recomendações inspiradas nas fontes primárias:
 - [OWASP Password Storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
 
 Essas referências organizam a revisão, sem alegação de cobertura integral dos padrões.
+
+
+## Veredito e bloqueio de entrega (v0.3)
+
+O relatório, JSON e painel exibem uma decisão determinística, independente da IA:
+
+| Veredito | Critério | `--gate` |
+| --- | --- | --- |
+| REPROVADO | Divergência de contrato HTTP ou versão npm associada a advisory OSV | 1 |
+| INCONCLUSIVO | Achados pendentes, erros, ausência de runtime/dependências ou nenhuma análise de arquivo | 3 |
+| APROVADO NO ESCOPO VERIFICADO | Contratos configurados correspondem, OSV concluído sem advisories e nenhuma pendência estática | 0 |
+
+A aprovação NÃO certifica segurança global ou produção. A ferramenta não conhece a política de negócio
+nem comprova isolamento do corpo das respostas. O checklist de 24 áreas continua indicando o trabalho
+fora desse escopo. Não declare apenas `/health` e interprete sua aprovação como teste de autenticação.
+Achados estáticos continuam hipóteses: bloqueiam aprovação como INCONCLUSIVO, sem inventar explorabilidade.
+
+Na raiz do frontend npm (com package-lock v2/v3), execute:
+
+```bash
+reposhield scan . --dependencies --runtime --gate
+```
+
+Antes, inicie a aplicação local e configure `runtime.base_url` e `runtime.cases` conforme a seção de
+matriz de acesso acima: caso anônimo negado, usuário comum negado para administração, administrador
+permitido, acesso cruzado negado e acesso legítimo permitido. Defina os recursos e políticas reais;
+a ferramenta não inventa contas ou executa o servidor automaticamente.
+
+`--dependencies` autoriza enviar **nomes e versões**, inclusive pacotes privados presentes no lock,
+à API pública OSV por HTTPS. Não envia código, não instala pacotes e não executa scripts npm.
+Inclui dependências de desenvolvimento e transitivas listadas no lock raiz; não varre outros locks.
+Limites: 5 MB por lock, 1000 pares únicos, lotes de 100 e timeout de 20 segundos por lote.
+Lock ausente/antigo, workspace, versão não exata, erro de rede, resposta inválida ou paginação deixam
+esta etapa incompleta. Uma correspondência de advisory exige avaliar alcance e atualizar a dependência;
+não é prova de que a aplicação é explorável. Referência: https://google.github.io/osv.dev/post-v1-querybatch/.
+
+Sem as opções de rede, `reposhield scan . --gate` permanece local e pode retornar INCONCLUSIVO.
+Sem `--gate`, códigos antigos continuam disponíveis: 0 significa execução concluída, não aprovação;
+`--fail-on` mantém o bloqueio por severidade. Erro de IA retorna 2 e conserva o relatório.
+Na interface, ative separadamente as autorizações de GETs locais e consulta ao OSV.
+
+RS209 agora identifica arquivos de teste (`*.spec.*`, `*.test.*`, `test_*.py`, diretórios de testes).
+A evidência é preservada com contexto, sem afirmar uma vulnerabilidade de produção. Ainda exige conferir
+o armazenamento real; possíveis segredos em testes nunca são suprimidos. O texto de risco de RS209
+passa a explicar acesso por JavaScript/XSS, em vez de confundir armazenamento com validação de JWT.
