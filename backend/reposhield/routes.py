@@ -6,6 +6,7 @@ from .audit import endpoint_findings
 AUTH=r'(?i)\b(?:current_user|get_current_user|require_auth|authenticate|authenticated|login_required|jwt_required|auth_required|verify_token|auth_guard|requireAuth|isAuthenticated)\b'
 AUTHZ=r'(?i)\b(?:require_role|has_permission|is_admin|authorize|check_permission|requireAdmin|requireRole|checkOwnership|require_owner|check_owner|verify_tenant)\b'
 VERBS={'get','post','put','patch','delete','head','options','route','api_route'}
+OBJECT_ID=r'(?i:\{[^}:]*(?:id|uuid)(?::[^}]*)?\}|<(?:[^>:]*:)?[^>]*(?:id|uuid)>)|:\w*(?:id|Id|uuid)(?![A-Za-z])'
 
 def node_source(text,node): return ast.get_source_segment(text,node) or ''
 
@@ -65,9 +66,12 @@ def check(ep,source,make):
     evidence=f'{"/".join(ep["methods"])} {path}'
     if not public and ep['authentication']=='unknown': out.append(make('RS100',rel,line,evidence,'low'))
     if not public and re.search(r'(^|/)(?:admin|management)(/|$)',path) and ep['authorization']=='unknown': out.append(make('RS101',rel,line,evidence,'low'))
-    if not public and re.search(r'\{[^}]*(?:id|uuid)[^}]*\}|<[^>]*(?:id|uuid)[^>]*>|:\w*(?:id|Id|uuid)\w*',path):
-        # Even a role guard does not prove object authorization; keep this as a low-confidence review.
-        out.append(make('RS102',rel,line,evidence,'low'))
+    if not public and re.search(OBJECT_ID,path):
+        if ep['authentication']=='unknown':
+            out.append(make('RS102',rel,line,evidence,'low'))
+        else:
+            # Authentication does not prove object authorization: a review item on the endpoint, not a finding.
+            ep['object_authorization']='manual_review'
     return out+endpoint_findings(ep,source,make)
 
 def js_routes(text,rel,public,make):

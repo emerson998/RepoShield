@@ -79,6 +79,8 @@ Para experimentar a fixture insegura: `reposhield serve --root .` e analise
 - Jobs em background, uma análise por vez e revisão opcional por IA.
 - Exclusões, `.gitignore`, limites de arquivos, tamanho e bytes.
 - Token local, validação de Host/Origin, restrição de raiz e descarte de symlinks.
+- Ferramentas externas opcionais (gitleaks, OSV-Scanner, Semgrep, Trivy, ZAP), importação de SARIF,
+  supressões justificadas, linha de base e modo diff. Veja as seções abaixo.
 
 ## Terminal e CI
 
@@ -157,12 +159,18 @@ backend/reposhield/
   cli.py                  Terminal, exportação e limiares de CI
   providers.py            Adaptadores CLI para revisão consultiva
   store.py                Histórico SQLite
+  adapters/               Ferramentas externas opcionais e importação SARIF
+  java.py                 Heurística Java/Spring
+  triage.py               Supressões, linha de base e modo diff
 backend/tests/            Casos de scanner, API e adaptadores
 examples/                 Fixture sintética de demonstração
 ```
 
 API protegida: `GET /api/settings`, `GET/POST /api/scans`,
 `GET /api/scans/{id}`, `GET /api/scans/{id}/export?format=json|sarif|markdown`.
+O corpo de `POST /api/scans` aceita `tools` (lista de até 6 nomes ou `["auto"]`) e
+`allow_downloads`. Importação SARIF, linha de base e diff ficam somente na CLI, pois
+aceitam caminhos arbitrários.
 Envie o header `X-RepoShield-Token`. A API não habilita CORS amplo.
 O endpoint público `/api/health` retorna somente estado.
 
@@ -182,6 +190,86 @@ Vite usa proxy para a API na porta 8765. O painel está em http://127.0.0.1:5173
 Após mudar o frontend de produção, rode novamente `npm run build` e reinicie a API.
 O workflow de CI executa testes do backend, build do frontend e gera SARIF da fixture.
 
+## Ferramentas externas (opcionais)
+
+O RepoShield pode executar ferramentas externas já instaladas no PATH e incorporar o resultado
+ao mesmo veredito. Nenhuma é instalada automaticamente.
+
+| Ferramenta | Eixo | Licença | Uso de rede | Flag necessária |
+| --- | --- | --- | --- | --- |
+| gitleaks | segredos | MIT | nenhum | nenhuma |
+| OSV-Scanner | dependências | Apache-2.0 | consulta por pacote (nomes e versões) | `--dependencies` |
+| Semgrep | SAST | LGPL-2.1 (motor) | nenhum; usa regras embutidas em `reposhield/rules/semgrep`, com `--metrics=off` | nenhuma |
+| Trivy | IaC | Apache-2.0 | baixa base/regras na primeira execução | `--allow-downloads` |
+| ZAP | runtime | Apache-2.0 | nenhum, mas exige `--runtime` e alvo em loopback | `--runtime` |
+
+Confirme as licenças antes de distribuir o RepoShield com essas ferramentas.
+
+```bash
+reposhield scan . --tools auto                  # executa as ferramentas disponíveis
+reposhield scan . --tools gitleaks,semgrep      # pede explicitamente algumas
+reposhield scan . --import resultados.sarif     # importa SARIF de outra ferramenta (repetível)
+```
+
+Ferramenta ausente nunca aprova: aparece como não instalada e, se pedida explicitamente, deixa o veredito inconclusivo.
+Com `auto`, ferramentas ausentes geram apenas aviso. A seção "Ferramentas executadas" do relatório
+mostra versão, eixo, uso de rede e situação de cada uma.
+
+### Linha de base e modo diff
+
+Para adotar o RepoShield em um projeto com dívida existente, salve um relatório JSON e use-o como
+linha de base. Achados já existentes deixam de bloquear o scan, mas continuam listados:
+
+```bash
+reposhield scan . --format json --output .reposhield/security-review.json
+reposhield scan . --baseline .reposhield/security-review.json --format json
+reposhield scan . --diff-base origin/main
+```
+
+Com `--diff-base`, apenas as linhas alteradas em relação à base entram na análise. O veredito
+registra essa exclusão em "Fora da aprovação".
+
+## Supressões
+
+Um achado comprovadamente falso positivo, ou um risco aceito, pode ser suprimido em
+`.reposhield.json` no projeto analisado. Cada item exige justificativa e responsável:
+
+```json
+{
+  "suppressions": [
+    {
+      "rule": "RS209",
+      "file": "src/app/session.service.ts",
+      "line": 42,
+      "justification": "Token sintético de teste; produção usa cookie HttpOnly.",
+      "author": "equipe-seguranca",
+      "expires": "2027-06-30"
+    }
+  ]
+}
+```
+
+- Identificação: `fingerprint`, `stable_key`, `id` ou `rule` + `file` (opcionalmente `line`).
+- `justification` com pelo menos 10 caracteres; `author` obrigatório.
+- `expires` com no máximo 365 dias de validade.
+- Achados `critical` exigem correspondência exata (`match`) para serem suprimidos.
+- Supressões inválidas tornam o scan inconclusivo, para que nenhuma exceção passe despercebida.
+- Achados suprimidos aparecem na seção "Não bloqueantes" do relatório, com autor, validade e justificativa.
+
+## Precisão
+
+Ajustes recentes que reduzem falsos positivos e negativos, sem eliminá-los:
+
+- Placeholders conhecidos (`changeme`, `example`, `${VAR}`, `<token>` e similares) não são tratados como segredo.
+- Um mesmo segredo em uma linha é reportado uma vez.
+- Dependências marcadas apenas como dev/build não bloqueiam a liberação; o relatório informa o alcance de cada advisory.
+- Angular: advisories que dependem de SSR são marcados como não aplicáveis quando o projeto não usa SSR.
+- C#/.NET: `FallbackPolicy` com `RequireAuthenticatedUser` e `[Authorize]` herdado de classe base no mesmo projeto.
+- Java/Spring: heurística para anotações locais; `SecurityFilterChain` complexo ainda não é resolvido.
+- Chaves de desenvolvimento reconhecidas são marcadas como bloqueadas fora de desenvolvimento. Elas não bloqueiam, mas geram aviso para confirmar que não são reutilizadas em produção.
+
+Cada item continua sendo indício a ser validado. A precisão não substitui revisão humana.
+
 ## Limites e roadmap
 
 Limites atuais: 2.000 arquivos, 300 KB por arquivo e 15 MB de conteúdo por análise.
@@ -190,9 +278,8 @@ binários, diretórios de build, dependências e links simbólicos são excluíd
 O histórico lista as 50 análises mais recentes; não há política de retenção automática.
 A API é uma ferramenta pessoal local, não um serviço multiusuário.
 
-Próximas entregas: integração com Semgrep/Gitleaks e auditoria de dependências de outros ecossistemas,
-resolução entre arquivos e middleware, falsos positivos com justificativa, comparação
-de scans, testes dinâmicos de mutações e correções em branches com diffs revisáveis.
+Próximas entregas: auditoria de dependências de outros ecossistemas, resolução entre arquivos
+e middleware, testes dinâmicos de mutações e correções em branches com diffs revisáveis.
 Os itens deste roadmap **não estão implementados nesta versão**; há runtime GET local e resolução local de routers disponíveis. Não há score de segurança
 artificial ou promessa de detectar todas as vulnerabilidades.
 
@@ -354,15 +441,16 @@ são excluídos como diretórios gerados. JSON, incluindo appsettings, já é li
 - RS402: callbacks conhecidos que aceitam certificados TLS indiscriminadamente.
 - RS403: possíveis segredos em JSON e senhas em connection strings, com evidência redigida.
 
-Não compila o projeto, não executa dotnet e não usa Roslyn. Não resolve atributos
-multilinha complexos, raw strings C#, namespaces de atributos, herança, filtros globais,
-fallback policies, MapGroup, extensões, preprocessor ou rotas convencionais. Um atributo
+Não compila o projeto, não executa dotnet e não usa Roslyn. FallbackPolicy com `RequireAuthenticatedUser` e
+`[Authorize]` herdado de classe base no mesmo projeto são considerados. Não resolve atributos
+multilinha complexos, raw strings C#, namespaces de atributos, filtros globais, MapGroup,
+extensões, preprocessor, semântica de policies ou rotas convencionais. Um atributo
 Authorize é apenas indício; não comprova proteção efetiva. Dependências NuGet não são
 auditadas pelo módulo OSV npm.
 
 ### Cobertura explícita
 
 Markdown, JSON e painel mostram arquivos lidos por extensão, motivos de exclusão,
-diretórios excluídos e fontes conhecidas sem analisador (como VB, Java, Go, PHP, Vue).
+diretórios excluídos e fontes conhecidas sem analisador (como VB, Go, PHP, Vue).
 Arquivos dentro de diretórios excluídos não são percorridos nem contabilizados como
 arquivos ignorados. Fontes não suportadas identificadas impedem aprovação do gate.

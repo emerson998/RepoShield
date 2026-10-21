@@ -36,19 +36,92 @@ RULE_REASONS = {
  'RS300':'O status observado divergiu da política que você declarou para este caso. A divergência pode indicar proteção incorreta, expectativa errada ou outra falha de execução; investigue o corpo e o contexto em teste.',
 }
 LABELS={'findings':'Achados para investigar','indicator_only':'Indício encontrado; precisa validar','manual_required':'Validação manual necessária'}
+TOOL_STATUS_LABELS = {'executed':'executada','not_installed':'não instalada','not_applicable':'não se aplica',
+ 'skipped_network':'bloqueada: exige consentimento de rede','failed':'falhou','imported':'importada via SARIF'}
+TOOL_NETWORK_LABELS = {'none':'nenhuma','rules_download':'baixa regras','db_download':'baixa base','per_query':'consulta por pacote'}
 
 def text(value):
     """Render repository-controlled strings as text, never active HTML or Markdown."""
     value=str(value).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
     return re.sub(r'([\\`*_{}\[\]()#+!|])',r'\\\1',value).replace('\n',' ')
 
+REACH_LABELS = {'production': 'produção', 'dev_only': 'dev/build', 'not_applicable': 'não aplicável', 'conditional': 'condicional (revisar)'}
+
+def dependency_line(v):
+    reach = v.get('reachability', 'production')
+    line = f"{text(v['package']+'@'+v['version'])} — {text(v['advisory'])} [{text(v.get('severity', 'unknown'))}, {text(REACH_LABELS.get(reach, reach))}]"
+    if v.get('condition'): line += ' · ' + text(v['condition'])
+    if v.get('fixed_in'): line += ' · corrigido em ' + text(', '.join(v['fixed_in']))
+    if v.get('aliases'): line += ' · aliases: ' + text(', '.join(v['aliases']))
+    return line
+
+def is_non_blocking(f):
+    return f.get('disposition') in {'suppressed', 'baseline'} or bool(f.get('suppressed_by')) or f.get('baseline') == 'existing'
+
+def finding_block(i, f, level):
+    heading = '#' * level
+    reason=RULE_REASONS.get(f['rule'],REASONS.get(f.get('category'),'Este padrão exige revisão para confirmar se viola a política de segurança da aplicação.'))
+    source = f.get('source') or 'reposhield-static'
+    origin = f" · Origem: {text(source)}" if source != 'reposhield-static' else ''
+    existing = ' (já existente na linha de base)' if f.get('baseline') == 'existing' else ''
+    lines = [f"{heading} {i}. {text(f['severity'].upper())} · {text(f['title'])}{existing}", '',
+        f"- Regra: {text(f['rule'])} · Referência: {text(f.get('cwe','não informada'))}.",
+        f"- Local: {text(f['file'])}, linha {f['line']}.",
+        f"- Contexto: {text(f.get('context','não classificado'))}. {text(f.get('context_note',''))}",
+        f"- Confiança: {text(f['confidence'])}{origin}."]
+    sp = f.get('suppressed_by')
+    if sp:
+        lines.append(f"- Suprimido por {text(sp.get('author', 'não informado'))} até {text(sp.get('expires', 'sem data'))}: {text(sp.get('justification', ''))}")
+    lines += ['', '**O que foi encontrado**', '', '> '+text(f['evidence']), '',
+        '**Por que ajustar ou investigar**', '', reason, '',
+        '**Como ajustar**', '',
+        '1. Localize o trecho indicado e confirme a origem dos dados e as proteções herdadas.',
+        '2. '+text(f['recommendation']),
+        '3. Preserve os fluxos legítimos e documente exceções intencionais com justificativa.', '',
+        '**Como validar**', '', text(f.get('validation','Reproduza em ambiente de teste e confirme o comportamento esperado.')), '',
+        '- [ ] Evidência confirmada ou falso positivo justificado.',
+        '- [ ] Ajuste aplicado e revisado, quando necessário.',
+        '- [ ] Teste de regressão passou e nova análise foi executada.', '']
+    return lines
+
+def tools_block(tools):
+    if not tools: return []
+    out = ['## Ferramentas executadas', '',
+        '| Ferramenta | Versão | Eixo | Rede | Situação | Achados | Detalhe |',
+        '| --- | --- | --- | --- | --- | --- | --- |']
+    for t in tools:
+        status = str(t.get('status') or '')
+        network = str(t.get('network') or '')
+        out.append(f"| {text(t.get('name') or '')} | {text(t.get('version') or 'não informada')} | {text(t.get('axis') or '')} | "
+                   f"{text(TOOL_NETWORK_LABELS.get(network, network))} | {text(TOOL_STATUS_LABELS.get(status, status))} | "
+                   f"{t.get('findings', 0)} | {text(t.get('detail') or '')} |")
+    return out + ['']
+
+def triage_block(triage):
+    triage = triage or {}
+    suppressed = triage.get('suppressed', 0)
+    baseline = triage.get('baseline')
+    diff = triage.get('diff')
+    warnings = triage.get('warnings') or []
+    if not (suppressed or baseline or diff or warnings): return []
+    out = ['## Triagem', '', f"Achados suprimidos com justificativa: {suppressed}.", '']
+    if baseline:
+        out += [f"Linha de base {text(baseline.get('file', ''))}: {baseline.get('new', 0)} novo(s), {baseline.get('existing', 0)} existente(s).", '']
+    if diff:
+        out += [f"Modo diff em relação a {text(diff.get('base', ''))}: {text(diff.get('note', ''))}", '']
+    if warnings:
+        out += ['**Avisos de triagem:**', *['- '+text(w) for w in warnings], '']
+    return out
+
 def markdown(report):
     findings=report['findings'];coverage=report['coverage']
+    pending=[f for f in findings if not is_non_blocking(f)]
+    parked=[f for f in findings if is_non_blocking(f)]
     out=[f"# RepoShield — Plano de ajustes de segurança: {text(report['project'])}", '',
         f"Data: {text(report['created_at'])} · Motor: {text(report.get('engine_version','0.1.0'))}", '',
         '## Resumo executivo','',
         f"- Arquivos analisados: {coverage['files']}; ignorados: {coverage['skipped']}.",
-        f"- Achados para investigar: {len(findings)}.",
+        f"- Achados para investigar: {len(pending)}." + (f" Não bloqueantes (suprimidos ou na linha de base): {len(parked)}." if parked else ''),
         f"- Cobertura: {'PARCIAL — consulte erros e limites' if coverage['partial'] else 'análise encerrada dentro dos limites configurados'}.",
         '- A ausência de achados não aprova a segurança da aplicação.', '',
         '## Ordem de execução','',
@@ -64,32 +137,24 @@ def markdown(report):
         'Arquivos lidos não significam cobertura semântica completa. Os arquivos dentro de diretórios excluídos não entram na contagem de ignorados.', '',
         *['- Código sem suporte: '+text(ext)+' ('+str(count)+' arquivos).' for ext, count in sorted(coverage.get('unsupported_source', {}).items())], '']
     out[4:4] = coverage_section
+    head = []
     verdict = report.get('verdict')
     if verdict:
-        section = ['## Veredito', '', '**'+text(verdict['label'])+'**', '',
+        head += ['## Veredito', '', '**'+text(verdict['label'])+'**', '',
                    'Escopo: '+text(verdict['scope']), '',
                    f"Contratos HTTP: {verdict['checks_passed']}/{verdict['checks_executed']} corresponderam ao esperado.", '',
                    *['- '+text(reason) for reason in verdict['reasons']], '',
+                   *(['**Avisos:**', *['- '+text(w) for w in verdict.get('warnings', [])], ''] if verdict.get('warnings') else []),
                    '**Fora da aprovação:**', *['- '+text(reason) for reason in verdict['exclusions']], '']
-        out[4:4] = section
+    head += tools_block(report.get('tools'))
+    head += triage_block(report.get('triage'))
+    out[4:4] = head
     if not findings: out += ['Nenhum achado pelas regras executadas. Ainda é necessário concluir o checklist manual.','']
-    for i,f in enumerate(findings,1):
-        reason=RULE_REASONS.get(f['rule'],REASONS.get(f.get('category'),'Este padrão exige revisão para confirmar se viola a política de segurança da aplicação.'))
-        out += [f"### {i}. {text(f['severity'].upper())} · {text(f['title'])}", '',
-            f"- Regra: {text(f['rule'])} · Referência: {text(f.get('cwe','não informada'))}.",
-            f"- Local: {text(f['file'])}, linha {f['line']}.",
-            f"- Contexto: {text(f.get('context','não classificado'))}. {text(f.get('context_note',''))}",
-            f"- Confiança: {text(f['confidence'])} · Origem: {text(f['source'])}.",
-            '', '**O que foi encontrado**', '', '> '+text(f['evidence']), '',
-            '**Por que ajustar ou investigar**', '', reason, '',
-            '**Como ajustar**', '',
-            '1. Localize o trecho indicado e confirme a origem dos dados e as proteções herdadas.',
-            '2. '+text(f['recommendation']),
-            '3. Preserve os fluxos legítimos e documente exceções intencionais com justificativa.', '',
-            '**Como validar**', '', text(f.get('validation','Reproduza em ambiente de teste e confirme o comportamento esperado.')), '',
-            '- [ ] Evidência confirmada ou falso positivo justificado.',
-            '- [ ] Ajuste aplicado e revisado, quando necessário.',
-            '- [ ] Teste de regressão passou e nova análise foi executada.', '']
+    elif not pending: out += ['Nenhum achado pendente; os achados suprimidos ou já existentes estão em "Não bloqueantes".','']
+    for i,f in enumerate(pending,1): out += finding_block(i,f,3)
+    if parked:
+        out += ['### Não bloqueantes','', 'Suprimidos com justificativa ou já existentes na linha de base. Não bloqueiam este scan.','']
+        for i,f in enumerate(parked,1): out += finding_block(i,f,4)
     out += ['## Checklist complementar de segurança','', 'Nenhum estado deste checklist significa aprovado.','']
     for c in report.get('controls',[]):
         out += [f"### {text(c['title'])}", '',f"Estado: {LABELS.get(c['status'],text(c['status']))}.", '',
@@ -103,10 +168,11 @@ def markdown(report):
         out += ['', 'Correspondência de status não comprova isolamento do corpo ou ausência de efeitos colaterais.','']
     if report.get('dependencies'):
         deps = report['dependencies']
-        out += ['## Dependências npm — OSV', '', 'Estado: '+text(deps['status']), text(deps['scope']),
+        out += ['## Dependências — OSV', '', 'Estado: '+text(deps.get('status','')), text(deps.get('scope','')),
                 f"Pacotes consultados: {deps['packages']}", '',
-                *['- '+text(v['package']+'@'+v['version']+' — '+v['advisory']) for v in deps['vulnerabilities']],
-                *['- '+text(e) for e in deps['errors']], '']
+                *['- '+dependency_line(v) for v in deps['vulnerabilities']],
+                *['- '+text(e) for e in deps['errors']],
+                *['- Aviso: '+text(w) for w in deps.get('warnings', [])], '']
     if report.get('ai'):
         out += ['## Revisão consultiva por IA','', 'Sugestões adicionais; não substituem a confirmação dos achados.','']
         out += ['> '+text(line) for line in report['ai']['text'].splitlines()]
@@ -115,4 +181,3 @@ def markdown(report):
         out += ['## Etapas incompletas ou erros','', *['- '+text(e) for e in report['errors']], '']
     out += ['## Limitações da varredura','', *['- '+text(x) for x in report['limitations']], '']
     return '\n'.join(out)
-

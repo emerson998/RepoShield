@@ -5,6 +5,14 @@ from reposhield.assurance import evaluate
 from reposhield.scanner import scan, markdown
 from reposhield.cli import main
 from reposhield.dependencies import check
+from reposhield import dependencies
+
+
+@pytest.fixture(autouse=True)
+def clear_osv_details():
+    dependencies._DETAILS.clear()
+    yield
+    dependencies._DETAILS.clear()
 
 
 def complete():
@@ -40,6 +48,9 @@ def test_scoped_success_and_failed_checks():
     assert evaluate(report)['status'] == 'rejected'
     report = complete()
     report['dependencies'] = {'status': 'failed', 'vulnerabilities': [{'advisory': 'GHSA-test'}]}
+    assert evaluate(report)['status'] == 'inconclusive'
+    report['dependencies'] = {'status': 'failed', 'vulnerabilities': [
+        {'advisory': 'GHSA-test', 'reachability': 'production', 'severity': 'critical'}]}
     assert evaluate(report)['status'] == 'rejected'
 
 
@@ -73,14 +84,17 @@ def test_osv_contract(tmp_path, monkeypatch, response, status):
     (tmp_path/'package-lock.json').write_text(json.dumps({'lockfileVersion': 3, 'packages': {
         '': {'name': 'app'}, 'node_modules/example': {'version': '1.2.3'}}}))
     class Response:
+        def __init__(self, data): self.data = data
         def __enter__(self): return self
         def __exit__(self, *args): pass
-        def read(self, limit): return json.dumps(response).encode()
+        def read(self, limit): return json.dumps(self.data).encode()
     class Opener:
         def open(self, request, timeout):
+            if '/v1/vulns/' in request.full_url:
+                return Response({'id': 'GHSA-test'})
             assert request.full_url == 'https://api.osv.dev/v1/querybatch'
             assert json.loads(request.data)['queries'][0]['version'] == '1.2.3'
-            return Response()
+            return Response(response)
     monkeypatch.setattr('urllib.request.build_opener', lambda *args: Opener())
     assert check(tmp_path)['status'] == status
 
@@ -92,6 +106,92 @@ def test_missing_lock_and_network_error_never_pass(tmp_path, monkeypatch):
     def fail(*args): raise OSError('offline')
     monkeypatch.setattr('urllib.request.build_opener', fail)
     assert check(tmp_path)['status'] == 'incomplete'
+
+
+def write_lock(tmp_path, extra=None):
+    packages = {'': {'name': 'app'}, 'node_modules/example': {'version': '1.2.3', **(extra or {})}}
+    (tmp_path/'package-lock.json').write_text(json.dumps({'lockfileVersion': 3, 'packages': packages}))
+
+
+def fake_osv(monkeypatch, batch, detail=None, detail_error=None):
+    class Response:
+        def __init__(self, data): self.data = data
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self, limit): return json.dumps(self.data).encode()
+    class Opener:
+        def open(self, request, timeout):
+            if '/v1/vulns/' in request.full_url:
+                if detail_error: raise detail_error
+                return Response(detail if detail is not None else {'id': 'GHSA-test'})
+            assert request.full_url == 'https://api.osv.dev/v1/querybatch'
+            return Response(batch)
+    monkeypatch.setattr('urllib.request.build_opener', lambda *args: Opener())
+
+
+def test_workspace_link_is_skipped_with_warning(tmp_path, monkeypatch):
+    (tmp_path/'package-lock.json').write_text(json.dumps({'lockfileVersion': 3, 'packages': {
+        '': {'name': 'app'}, 'node_modules/ui': {'link': True, 'resolved': 'packages/ui'},
+        'node_modules/example': {'version': '1.2.3'}}}))
+    fake_osv(monkeypatch, {'results': [{}]})
+    result = check(tmp_path)
+    assert result['status'] == 'passed'
+    assert result['skipped_local'] == 1
+    assert result['warnings']
+
+
+def test_dev_flag_sets_reachability(tmp_path, monkeypatch):
+    write_lock(tmp_path, {'dev': True})
+    fake_osv(monkeypatch, {'results': [{'vulns': [{'id': 'GHSA-test'}]}]})
+    assert check(tmp_path)['vulnerabilities'][0]['reachability'] == 'dev_only'
+
+
+def test_dev_only_high_advisory_does_not_reject():
+    report = complete()
+    report['dependencies'] = {'status': 'failed', 'vulnerabilities': [
+        dict(package='x', version='1.0.0', advisory='GHSA-dev', reachability='dev_only', severity='high')]}
+    verdict = evaluate(report)
+    assert verdict['status'] == 'passed_scoped'
+    assert verdict['warnings']
+
+
+def test_production_high_advisory_rejects():
+    report = complete()
+    report['dependencies'] = {'status': 'failed', 'vulnerabilities': [
+        dict(package='x', version='1.0.0', advisory='GHSA-prod', reachability='production', severity='high')]}
+    assert evaluate(report)['status'] == 'rejected'
+
+
+def test_detail_failure_is_unknown_and_inconclusive(tmp_path, monkeypatch):
+    write_lock(tmp_path)
+    fake_osv(monkeypatch, {'results': [{'vulns': [{'id': 'GHSA-test'}]}]}, detail_error=OSError('offline'))
+    deps = check(tmp_path)
+    assert deps['status'] == 'failed'
+    assert deps['vulnerabilities'][0]['severity'] == 'unknown'
+    assert deps['warnings']
+    report = complete()
+    report['dependencies'] = deps
+    assert evaluate(report)['status'] == 'inconclusive'
+
+
+def test_advisory_details_are_extracted(tmp_path, monkeypatch):
+    write_lock(tmp_path)
+    detail = {'id': 'GHSA-abc', 'summary': 'x' * 250, 'aliases': ['CVE-2026-0001'],
+              'database_specific': {'severity': 'MODERATE'},
+              'severity': [{'type': 'CVSS_V3', 'score': 'CVSS:3.1/AV:N'}],
+              'affected': [
+                  {'package': {'ecosystem': 'npm', 'name': 'example'},
+                   'ranges': [{'type': 'SEMVER', 'events': [{'introduced': '0'}, {'fixed': '1.2.4'}]}]},
+                  {'package': {'ecosystem': 'PyPI', 'name': 'example'},
+                   'ranges': [{'type': 'ECOSYSTEM', 'events': [{'fixed': '9.9.9'}]}]}]}
+    fake_osv(monkeypatch, {'results': [{'vulns': [{'id': 'GHSA-abc'}]}]}, detail=detail)
+    vuln = check(tmp_path)['vulnerabilities'][0]
+    assert vuln['severity'] == 'medium'
+    assert vuln['fixed_in'] == ['1.2.4']
+    assert vuln['aliases'] == ['CVE-2026-0001']
+    assert vuln['cvss'] == 'CVSS:3.1/AV:N'
+    assert len(vuln['summary']) == 200
+    assert vuln['reachability'] == 'production'
 
 
 

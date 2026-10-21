@@ -1,1 +1,1 @@
-{"public_routes":["/health","/healthz","/login"],"exclude":["tests/","examples/","**/*.min.js"]}
+{"public_routes":["/health","/healthz","/login"],"exclude":["tests/","examples/","**/*.min.js"],"suppressions":[{"rule":"RS209","file":"src/app/session.service.ts","line":42,"justification":"Token sintético de teste; produção usa cookie HttpOnly.","author":"equipe-seguranca","expires":"2027-06-30"}]}

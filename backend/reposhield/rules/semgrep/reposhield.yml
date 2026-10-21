@@ -1,0 +1,202 @@
+# Regras RepoShield para Semgrep. Escritas pelo projeto (licença do RepoShield).
+# Alta precisão: cada padrão exclui o caso seguro óbvio (literal). Não são cobertura completa de SAST.
+rules:
+  - id: reposhield.python.subprocess-shell-true
+    languages: [python]
+    severity: ERROR
+    message: "subprocess chamado com shell=True e comando não literal. Passe a lista de argumentos sem shell=True."
+    metadata:
+      cwe: "CWE-78: OS Command Injection"
+      category: security
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.$F($CMD, ..., shell=True, ...)
+          - pattern: subprocess.$F($CMD, ..., shell = True, ...)
+      - pattern-not: subprocess.$F("...", ...)
+      - pattern-not: subprocess.$F('...', ...)
+
+  - id: reposhield.python.yaml-load-inseguro
+    languages: [python]
+    severity: ERROR
+    message: "yaml.load sem SafeLoader pode instanciar objetos arbitrários. Use yaml.safe_load ou Loader=SafeLoader."
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      category: security
+    patterns:
+      - pattern: yaml.load($X, ...)
+      - pattern-not: yaml.load($X, Loader=yaml.SafeLoader)
+      - pattern-not: yaml.load($X, Loader=yaml.CSafeLoader)
+      - pattern-not: yaml.load($X, Loader=SafeLoader)
+
+  - id: reposhield.python.pickle-loads
+    languages: [python]
+    severity: WARNING
+    message: "pickle.load/loads desserializa dados que podem vir de fora. Use formato de dados sem execução de código (JSON)."
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      category: security
+    pattern-either:
+      - pattern: pickle.loads($X)
+      - pattern: pickle.load($F)
+
+  - id: reposhield.python.eval-exec-variavel
+    languages: [python]
+    severity: ERROR
+    message: "eval/exec recebe valor não literal. Substitua por parsing explícito (ast.literal_eval ou lógica direta)."
+    metadata:
+      cwe: "CWE-95: Eval Injection"
+      category: security
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: exec($X)
+      - pattern-not: eval("...")
+      - pattern-not: exec("...")
+      - pattern-not: eval('...')
+      - pattern-not: exec('...')
+
+  - id: reposhield.python.requests-verify-false
+    languages: [python]
+    severity: WARNING
+    message: "Requisição HTTP com verify=False desliga a validação de certificado TLS."
+    metadata:
+      cwe: "CWE-295: Improper Certificate Validation"
+      category: security
+    pattern: requests.$M(..., verify=False, ...)
+
+  - id: reposhield.js.eval-variavel
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: "eval recebe valor não literal. Evite eval; use estruturas de dados ou parsing explícito."
+    metadata:
+      cwe: "CWE-95: Eval Injection"
+      category: security
+    patterns:
+      - pattern: eval($X)
+      - pattern-not: eval("...")
+      - pattern-not: eval('...')
+
+  - id: reposhield.js.innerhtml-variavel
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: "innerHTML recebe valor dinâmico. Use textContent ou sanitize a entrada antes de inserir HTML."
+    metadata:
+      cwe: "CWE-79: Cross-site Scripting"
+      category: security
+    patterns:
+      - pattern: $EL.innerHTML = $X
+      - pattern-not: $EL.innerHTML = "..."
+      - pattern-not: $EL.innerHTML = '...'
+
+  - id: reposhield.js.child-process-exec-concatenado
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: "child_process.exec/execSync recebe comando montado por template ou concatenação. Use execFile/spawn com lista de argumentos."
+    metadata:
+      cwe: "CWE-78: OS Command Injection"
+      category: security
+    patterns:
+      - pattern-either:
+          - pattern: child_process.exec($X, ...)
+          - pattern: child_process.execSync($X, ...)
+      - metavariable-regex:
+          metavariable: $X
+          regex: '^\s*(`[^`]*\$\{|.*\+)'
+
+  - id: reposhield.js.jwt-verify-none
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: "jwt.verify aceita o algoritmo 'none', o que permite tokens sem assinatura. Liste apenas algoritmos de assinatura esperados."
+    metadata:
+      cwe: "CWE-347: Improper Verification of Cryptographic Signature"
+      category: security
+    pattern-either:
+      - pattern: 'jwt.verify($T, $K, {algorithms: ["none"], ...})'
+      - pattern: 'jwt.verify($T, $K, {algorithms: [..., "none", ...], ...})'
+
+  - id: reposhield.csharp.sql-concatenado
+    languages: [csharp]
+    severity: ERROR
+    message: "Comando SQL montado por concatenação ou interpolação. Use parâmetros (SqlParameter, FormattableString ou ExecuteSqlInterpolated)."
+    metadata:
+      cwe: "CWE-89: SQL Injection"
+      category: security
+    patterns:
+      - pattern-either:
+          - pattern: new SqlCommand($Q, ...)
+          - pattern: $DB.ExecuteSqlRaw($Q, ...)
+          - pattern: $DB.ExecuteSqlRawAsync($Q, ...)
+          - pattern: $DB.FromSqlRaw($Q, ...)
+      - metavariable-regex:
+          metavariable: $Q
+          regex: '^\s*(\$"|.*\+)'
+
+  - id: reposhield.csharp.binaryformatter
+    languages: [csharp]
+    severity: ERROR
+    message: "BinaryFormatter é inseguro para desserialização de dados não confiáveis e está obsoleto no .NET. Use System.Text.Json com tipos fixos."
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      category: security
+    pattern-either:
+      - pattern: new BinaryFormatter(...)
+      - pattern: new System.Runtime.Serialization.Formatters.Binary.BinaryFormatter(...)
+
+  - id: reposhield.csharp.process-start-concatenado
+    languages: [csharp]
+    severity: ERROR
+    message: "Process.Start recebe comando ou argumentos montados por concatenação ou interpolação. Passe argumentos separados e valide-os."
+    metadata:
+      cwe: "CWE-78: OS Command Injection"
+      category: security
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: Process.Start($Q)
+              - pattern: Process.Start($Q, $A)
+          - metavariable-regex:
+              metavariable: $Q
+              regex: '^\s*(\$"|.*\+)'
+      - patterns:
+          - pattern: Process.Start($Q, $A)
+          - metavariable-regex:
+              metavariable: $A
+              regex: '^\s*(\$"|.*\+)'
+
+  - id: reposhield.java.statement-sql-concatenado
+    languages: [java]
+    severity: ERROR
+    message: "Statement executa SQL montado por concatenação. Use PreparedStatement com parâmetros."
+    metadata:
+      cwe: "CWE-89: SQL Injection"
+      category: security
+    patterns:
+      - pattern-either:
+          - pattern: $S.executeQuery($Q)
+          - pattern: $S.executeUpdate($Q)
+          - pattern: $S.execute($Q)
+      - metavariable-regex:
+          metavariable: $Q
+          regex: '.*\+'
+
+  - id: reposhield.java.objectinputstream-readobject
+    languages: [java]
+    severity: WARNING
+    message: "ObjectInputStream.readObject desserializa dados serializados Java. Não use com dados não confiáveis sem filtro de classes."
+    metadata:
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+      category: security
+    pattern: (ObjectInputStream $O).readObject()
+
+  - id: reposhield.java.runtime-exec-concatenado
+    languages: [java]
+    severity: ERROR
+    message: "Runtime.exec recebe comando montado por concatenação. Use ProcessBuilder com lista de argumentos."
+    metadata:
+      cwe: "CWE-78: OS Command Injection"
+      category: security
+    patterns:
+      - pattern: Runtime.getRuntime().exec($Q)
+      - metavariable-regex:
+          metavariable: $Q
+          regex: '.*\+'

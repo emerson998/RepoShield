@@ -8,12 +8,13 @@ from fastapi import FastAPI, Header, HTTPException, Depends, Request
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from . import __version__
 from .scanner import scan, sarif, markdown
 from .providers import available, review
 from . import store
 from .assurance import evaluate
 
-app=FastAPI(title='RepoShield',version='0.4.0',docs_url=None,redoc_url=None,openapi_url=None)
+app=FastAPI(title='RepoShield',version=__version__,docs_url=None,redoc_url=None,openapi_url=None)
 TOKEN=os.environ.get('REPOSHIELD_TOKEN') or secrets.token_urlsafe(32)
 ROOT=Path(os.environ.get('REPOSHIELD_ROOT',os.getcwd())).expanduser().resolve()
 lock=threading.Lock()
@@ -28,12 +29,16 @@ def auth(request: Request, x_reposhield_token: str=Header(default='')):
         raise HTTPException(403,'Origem inválida')
     if not secrets.compare_digest(x_reposhield_token,TOKEN): raise HTTPException(401,'Token local inválido')
 
+TOOL_NAMES={'auto','gitleaks','osv-scanner','semgrep','trivy','zap'}
+
 class ScanRequest(BaseModel):
     path: str=Field(min_length=1,max_length=2048)
     provider: str='none'
     consent: bool=False
     runtime: bool=False
     dependencies: bool=False
+    tools: list[str]=Field(default_factory=list)
+    allow_downloads: bool=False
 
 @app.get('/api/health')
 def health(): return {'status':'ok'}
@@ -44,9 +49,9 @@ def settings(): return {'root':str(ROOT),'providers':available()}
 @app.get('/api/scans',dependencies=[Depends(auth)])
 def history(): return store.history()
 
-def work(identifier,path,provider,runtime_enabled,dependencies_enabled=False):
+def work(identifier,path,provider,runtime_enabled,dependencies_enabled=False,tools=None,allow_downloads=False):
     try:
-        report=scan(path,runtime_enabled=runtime_enabled,dependencies_enabled=dependencies_enabled)
+        report=scan(path,runtime_enabled=runtime_enabled,dependencies_enabled=dependencies_enabled,tools=tools,allow_downloads=allow_downloads)
         if provider!='none':
             try: report['ai']=review(report,provider)
             except ValueError as exc: report['errors'].append(str(exc))
@@ -60,6 +65,10 @@ def work(identifier,path,provider,runtime_enabled,dependencies_enabled=False):
 def create(req: ScanRequest):
     if req.provider not in {'none','claude','codex'}: raise HTTPException(422,'Provedor inválido')
     if req.provider!='none' and not req.consent: raise HTTPException(422,'Confirme o envio de achados ao provedor.')
+    if len(req.tools)>6: raise HTTPException(422,'Informe no máximo 6 ferramentas.')
+    if any(t not in TOOL_NAMES for t in req.tools): raise HTTPException(422,'Ferramenta inválida.')
+    if 'auto' in req.tools and len(set(req.tools))>1: raise HTTPException(422,'Use "auto" sozinho ou apenas nomes explícitos de ferramenta.')
+    tools=set(req.tools) or None
     path=Path(req.path).expanduser()
     if not path.is_absolute(): path=ROOT/path
     path=path.resolve()
@@ -69,7 +78,7 @@ def create(req: ScanRequest):
         identifier=uuid.uuid4().hex
         jobs.clear()
         jobs[identifier]={'status':'running'}
-    pool.submit(work,identifier,path,req.provider,req.runtime,req.dependencies)
+    pool.submit(work,identifier,path,req.provider,req.runtime,req.dependencies,tools,req.allow_downloads)
     return {'id':identifier,'status':'running'}
 
 @app.get('/api/scans/{identifier}',dependencies=[Depends(auth)])

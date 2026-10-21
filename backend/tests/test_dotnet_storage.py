@@ -125,3 +125,80 @@ def test_default_scan_never_uses_network(tmp_path, monkeypatch):
     monkeypatch.setattr('http.client.HTTPConnection.connect', forbidden)
     (tmp_path/'Program.cs').write_text('app.MapGet("/", () => "ok");')
     scan(tmp_path)
+
+
+def test_placeholders_are_not_secrets(tmp_path):
+    (tmp_path/'appsettings.json').write_text('''{
+  "Password": "<senha>",
+  "ConnectionStrings": {"Default": "Server=x;User Id=sa;Password=<senha>;"},
+  "ApiKey": "${API_KEY}",
+  "JwtKey": "changeme"
+}''')
+    report = scan(tmp_path)
+    assert not any(f['rule'] in {'RS001', 'RS403'} for f in report['findings'])
+
+
+def test_real_secret_still_reported(tmp_path):
+    (tmp_path/'appsettings.json').write_text('{"ClientSecret": "s3cr3t-Real-Value-123"}')
+    assert any(f['rule'] == 'RS403' for f in scan(tmp_path)['findings'])
+
+
+CONTROLLER = '''[Route("api/[controller]")]
+public class ItemsController : ControllerBase {
+ [HttpGet("{id}")]
+ public IActionResult Get(int id) { return Ok(); }
+}
+'''
+
+
+def test_fallback_policy_resolves_unauthenticated_controller(tmp_path):
+    (tmp_path/'UsersController.cs').write_text(CONTROLLER)
+    (tmp_path/'Program.cs').write_text('''builder.Services.AddAuthorization(o => { o.FallbackPolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build(); });
+''')
+    report = scan(tmp_path)
+    ep = next(e for e in report['endpoints'] if e['path'] == '/api/Items/{id}')
+    assert ep['authentication'] == 'hint_found'
+    assert ep['object_authorization'] == 'manual_review'
+    assert 'fallback_policy:Program.cs:1' in ep['auth_sources']
+    assert not any(f['rule'] in {'RS100', 'RS102'} and f['file'] == 'UsersController.cs' for f in report['findings'])
+
+
+def test_without_fallback_policy_controller_is_reported(tmp_path):
+    (tmp_path/'UsersController.cs').write_text(CONTROLLER)
+    report = scan(tmp_path)
+    ep = next(e for e in report['endpoints'] if e['path'] == '/api/Items/{id}')
+    assert ep['authentication'] == 'unknown'
+    assert {'RS100', 'RS102'} <= {f['rule'] for f in report['findings'] if f['file'] == 'UsersController.cs'}
+
+
+def test_authorize_class_with_object_id_is_manual_review(tmp_path):
+    (tmp_path/'UsersController.cs').write_text('''[Route("api/[controller]")]
+[Authorize]
+public class UsersController : ControllerBase {
+ [HttpGet("{id}")]
+ public IActionResult Get(int id) { return Ok(); }
+}
+''')
+    report = scan(tmp_path)
+    ep = next(e for e in report['endpoints'] if e['path'] == '/api/Users/{id}')
+    assert ep['authentication'] == 'hint_found'
+    assert ep['object_authorization'] == 'manual_review'
+    assert 'RS102' not in {f['rule'] for f in report['findings']}
+
+
+def test_fallback_policy_scoped_to_declaring_directory(tmp_path):
+    from reposhield.scanner import scan
+    (tmp_path/'api').mkdir(); (tmp_path/'other').mkdir()
+    (tmp_path/'api'/'Program.cs').write_text('builder.Services.AddAuthorization(o => { o.FallbackPolicy = new AuthorizationPolicyBuilder().RequireAuthenticatedUser().Build(); });')
+    controller = '[ApiController]\n[Route("items")]\npublic class ItemsController : ControllerBase {\n  [HttpGet("{id}")]\n  public IActionResult Get(int id) { return Ok(); }\n}\n'
+    (tmp_path/'api'/'ItemsController.cs').write_text(controller)
+    (tmp_path/'other'/'ItemsController.cs').write_text(controller)
+    rules = {(f['file'], f['rule']) for f in scan(tmp_path)['findings']}
+    assert ('api/ItemsController.cs', 'RS100') not in rules
+    assert ('other/ItemsController.cs', 'RS100') in rules
+
+
+def test_placeholder_requires_separator_after_your():
+    from reposhield.syntax import placeholder
+    assert placeholder('your-api-key') and placeholder('<senha>') and placeholder('${DB_PASS}')
+    assert not placeholder('yourSecretValue123')

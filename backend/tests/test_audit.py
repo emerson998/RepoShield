@@ -21,7 +21,8 @@ def get_order(order_id): return {}
     assert ep['authentication']=='hint_found'
     assert 'local_router_or_app' in ep['auth_sources']
     assert 'RS100' not in ids(r)
-    assert 'RS102' in ids(r)
+    assert 'RS102' not in ids(r)
+    assert r['endpoints'][0]['object_authorization']=='manual_review'
 
 def test_generic_dependency_and_auth_comments_do_not_prove_auth(tmp_path):
     r=project(tmp_path,'''@app.get('/private')
@@ -73,7 +74,8 @@ def test_express_route_guards_and_cross_object_review(tmp_path):
     assert r['endpoints'][0]['authentication']=='hint_found'
     assert r['endpoints'][0]['authorization']=='hint_found'
     assert 'RS101' not in ids(r)
-    assert 'RS102' in ids(r)
+    assert 'RS102' not in ids(r)
+    assert r['endpoints'][0]['object_authorization']=='manual_review'
 
 def test_openapi_security_inheritance_overrides_and_anonymous_alternative(tmp_path):
     spec={'openapi':'3.0.3','components':{'securitySchemes':{'bearer':{'type':'http','scheme':'bearer'}}},'security':[{'bearer':[]}],
@@ -92,7 +94,7 @@ def test_checklist_does_not_claim_safe_without_findings(tmp_path):
     assert all(c['status']=='manual_required' for c in r['controls'])
     assert not r['findings']
     assert 'Checklist' in markdown(r)
-    assert len(sarif(r)['runs'][0]['tool']['driver']['rules'])==46
+    assert len(sarif(r)['runs'][0]['tool']['driver']['rules'])==50  # 46 + RS500..RS503 (Java)
 
 def test_invalid_config_and_malformed_openapi(tmp_path):
     import pytest
