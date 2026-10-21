@@ -7,13 +7,13 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 import pathspec
-from . import assurance
+from . import assurance, dotnet
 from . import audit
 from . import runtime
 from .routes import python_routes, js_routes
 
-EXCLUDED = {'.git', '.venv', 'venv', 'node_modules', 'dist', 'build', '__pycache__', '.next', '.reposhield'}
-EXTENSIONS = {'.py', '.js', '.jsx', '.ts', '.tsx', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.env'}
+EXCLUDED = {'.git', '.venv', 'venv', 'node_modules', 'dist', 'build', '__pycache__', '.next', '.reposhield', 'bin', 'obj', '.vs'}
+EXTENSIONS = {'.py', '.js', '.jsx', '.ts', '.tsx', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.env', '.cs', '.csproj', '.props', '.targets'}
 RULES = {
  'RS001': ('high', 'Possível segredo no código', 'Remova o valor do código, revogue a credencial e use um gerenciador de segredos.'),
  'RS002': ('high', 'TLS sem verificação de certificado', 'Ative a validação do certificado e configure uma CA confiável.'),
@@ -24,6 +24,7 @@ RULES = {
  'RS101': ('high', 'Rota administrativa sem autorização aparente', 'Exija uma política de autorização no servidor e teste com usuário sem privilégio.'),
  'RS102': ('medium', 'Revisar autorização por objeto', 'Confirme propriedade/tenant do recurso e teste acesso cruzado entre usuários.'),
 }
+RULES.update(dotnet.RULES)
 RULES.update(audit.RULES)
 RULES.update(runtime.RULES)
 LEGACY_META = {
@@ -32,16 +33,17 @@ LEGACY_META = {
  'RS005': ('tokens','CWE-347'), 'RS100': ('authentication','CWE-306'),
  'RS101': ('authorization','CWE-862'), 'RS102': ('authorization','CWE-639'),
 }
-SECRET = re.compile(r"""(?i)\b(?:api[_-]?key|secret[_-]?key|password|access[_-]?token)\b\s*[:=]\s*["']([^"'\n]{8,})["']""")
+SECRET = re.compile(r"""(?i)\b(?:api[_-]?key|secret[_-]?key|client[_-]?secret|signing[_-]?key|jwt[_-]?key|password|access[_-]?token)\b["']?\s*[:=]\s*["']([^"'\n]{8,})["']""")
 
 def redact(value):
     value = SECRET.sub(lambda m: m.group(0).replace(m.group(1), '[REDACTED]'), value)
+    value = re.sub(r'(?i)(\b(?:password|pwd)\s*=\s*)[^;"\'\n]+', r'\1[REDACTED]', value)
     return re.sub(r'\b(?:AKIA[A-Z0-9]{16}|gh[pousr]_[A-Za-z0-9]{20,})\b', '[REDACTED]', value)
 
 def finding(rule, file, line, evidence, confidence='medium'):
     severity, title, recommendation = RULES[rule]
     key = f'{rule}:{file}:{line}:{redact(evidence)}'
-    meta = audit.META.get(rule) or runtime.META.get(rule) or dict(category=LEGACY_META[rule][0],cwe=LEGACY_META[rule][1],validation='Confirme o fluxo em ambiente de teste e adicione um teste de regressão.')
+    meta = audit.META.get(rule) or dotnet.META.get(rule) or runtime.META.get(rule) or dict(category=LEGACY_META[rule][0],cwe=LEGACY_META[rule][1],validation='Confirme o fluxo em ambiente de teste e adicione um teste de regressão.')
     return dict(id=hashlib.sha256(key.encode()).hexdigest()[:16], rule=rule, severity=severity,
                 title=title, file=file, line=line, evidence=redact(evidence)[:350],
                 confidence=confidence, status='needs_review', source='reposhield-static',
@@ -66,14 +68,21 @@ def scan(project, *, runtime_enabled=False, dependencies_enabled=False):
     spec = pathspec.PathSpec.from_lines('gitwildmatch', patterns)
     findings, endpoints, errors = [], [], []
     indicators = {}
+    by_extension, skipped_reasons, unsupported_source = {}, {}, {}
+    excluded_directories = 0
     scanned, skipped, total = 0, 0, 0
     partial = False
     for directory, dirs, files in os.walk(root, followlinks=False):
+        excluded_directories += sum(d in EXCLUDED or (Path(directory)/d).is_symlink() for d in dirs)
         dirs[:] = sorted(d for d in dirs if d not in EXCLUDED and not (Path(directory)/d).is_symlink())
         for name in sorted(files):
             path = Path(directory)/name
             rel = path.relative_to(root).as_posix()
             if path.is_symlink() or spec.match_file(rel) or (path.suffix not in EXTENSIONS and path.name != '.env'):
+                reason = 'symlink' if path.is_symlink() else 'configured_ignore' if spec.match_file(rel) else 'unsupported_extension'
+                skipped_reasons[reason] = skipped_reasons.get(reason, 0)+1
+                if reason == 'unsupported_extension' and path.suffix in {'.java','.go','.rb','.php','.rs','.kt','.vb','.fs','.vue','.svelte'}:
+                    unsupported_source[path.suffix] = unsupported_source.get(path.suffix, 0)+1
                 skipped += 1; continue
             if scanned >= 2000:
                 partial = True; break
@@ -87,7 +96,10 @@ def scan(project, *, runtime_enabled=False, dependencies_enabled=False):
             except (OSError, UnicodeError):
                 errors.append(f'{rel}: leitura indisponível'); partial = True; continue
             scanned += 1; total += size
-            for number, line in enumerate(text.splitlines(),1):
+            by_extension[path.suffix or path.name] = by_extension.get(path.suffix or path.name, 0)+1
+            from .syntax import clean
+            code_text = clean(text) if path.suffix == '.cs' else text
+            for number, line in enumerate(code_text.splitlines(),1):
                 for rule, pattern in [
                     ('RS001', SECRET),
                     ('RS002', r'\bverify\s*=\s*False\b|rejectUnauthorized\s*:\s*false'),
@@ -101,6 +113,11 @@ def scan(project, *, runtime_enabled=False, dependencies_enabled=False):
             for category, hits in refs.items():
                 indicators.setdefault(category,[]).extend(hits)
                 indicators[category] = indicators[category][:12]
+            if path.suffix == '.cs':
+                eps, extra = dotnet.analyze(text, rel, public, finding)
+                endpoints.extend(eps); findings.extend(extra)
+            if path.suffix in {'.cs','.json','.config','.csproj','.props','.targets'}:
+                findings.extend(dotnet.config_secrets(text, rel, finding))
             if path.suffix == '.py':
                 try: ast.parse(text)
                 except SyntaxError as exc: errors.append(f'{rel}: sintaxe Python não analisada na linha {exc.lineno}')
@@ -127,11 +144,12 @@ def scan(project, *, runtime_enabled=False, dependencies_enabled=False):
     findings.sort(key=lambda f:(levels[f['severity']],f['file'],f['line'],f['rule']))
     checklist = audit.controls(findings,indicators,endpoints)
     assurance.classify(findings)
-    report = dict(version=3,runtime=runtime_report,engine_version='0.3.0',controls=checklist,summary=dict(
+    report = dict(version=3,runtime=runtime_report,engine_version='0.4.0',controls=checklist,summary=dict(
         rules=len(RULES),controls=len(checklist),findings=len(findings),
         requires_manual=sum(c['status']=='manual_required' for c in checklist)),created_at=datetime.now(timezone.utc).isoformat(),project=root.name,
-        findings=findings,endpoints=endpoints,coverage=dict(files=scanned,skipped=skipped,bytes=total,partial=partial),
+        findings=findings,endpoints=endpoints,coverage=dict(files=scanned,skipped=skipped,bytes=total,partial=partial,by_extension=by_extension,skipped_reasons=skipped_reasons,excluded_directories=excluded_directories,unsupported_source=unsupported_source),
         errors=errors,ai=None,limitations=['Análise heurística; não confirma explorabilidade.',
+        'C#/.NET: padrões locais em controllers e Minimal APIs; não resolve herança, filtros globais ou policies.',
         'Python: decorators e herança local de routers. JavaScript: snippets Express heurísticos. OpenAPI: contratos 3.x JSON locais.',
         'Não resolve imports, middleware arbitrário ou semântica de guards; ausência de achados não prova segurança.',
         'Runtime opcional só verifica GETs explícitos locais. OSV opcional limitado ao lock npm raiz; sem brute force ou correção automática.'])
@@ -144,7 +162,7 @@ def scan(project, *, runtime_enabled=False, dependencies_enabled=False):
 def sarif(report):
     return {'version':'2.1.0','$schema':'https://json.schemastore.org/sarif-2.1.0.json','runs':[{
         'properties':{'verdict':report.get('verdict'),'dependencies':report.get('dependencies')},
-        'tool':{'driver':{'name':'RepoShield','version':'0.3.0','rules':[{'id':k,'shortDescription':{'text':v[1]},'help':{'text':v[2]}} for k,v in RULES.items()]}},
+        'tool':{'driver':{'name':'RepoShield','version':'0.4.0','rules':[{'id':k,'shortDescription':{'text':v[1]},'help':{'text':v[2]}} for k,v in RULES.items()]}},
         'results':[{'ruleId':f['rule'],'level':'error' if f['severity'] in {'critical','high'} else 'warning',
             'message':{'text':f['title']+' — '+f['recommendation']},
             'properties':{'confidence':f['confidence'],'category':f.get('category'),'cwe':f.get('cwe')},

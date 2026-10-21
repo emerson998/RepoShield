@@ -92,7 +92,7 @@ def test_checklist_does_not_claim_safe_without_findings(tmp_path):
     assert all(c['status']=='manual_required' for c in r['controls'])
     assert not r['findings']
     assert 'Checklist' in markdown(r)
-    assert len(sarif(r)['runs'][0]['tool']['driver']['rules'])==42
+    assert len(sarif(r)['runs'][0]['tool']['driver']['rules'])==46
 
 def test_invalid_config_and_malformed_openapi(tmp_path):
     import pytest
@@ -107,3 +107,4 @@ def test_config_symlink_rejected(tmp_path):
     (tmp_path/'actual.json').write_text('{}')
     (tmp_path/'.reposhield.json').symlink_to(tmp_path/'actual.json')
     with pytest.raises(ValueError): scan(tmp_path)
+

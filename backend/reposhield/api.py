@@ -13,7 +13,7 @@ from .providers import available, review
 from . import store
 from .assurance import evaluate
 
-app=FastAPI(title='RepoShield',version='0.3.0',docs_url=None,redoc_url=None,openapi_url=None)
+app=FastAPI(title='RepoShield',version='0.4.0',docs_url=None,redoc_url=None,openapi_url=None)
 TOKEN=os.environ.get('REPOSHIELD_TOKEN') or secrets.token_urlsafe(32)
 ROOT=Path(os.environ.get('REPOSHIELD_ROOT',os.getcwd())).expanduser().resolve()
 lock=threading.Lock()

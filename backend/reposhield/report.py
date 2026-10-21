@@ -57,6 +57,13 @@ def markdown(report):
         '3. Aplique cada ajuste em branch e valide com testes de regressão.',
         '4. Revise os controles manuais e execute novamente o RepoShield.', '',
         '## Ajustes por achado','']
+    coverage_section = ['## Cobertura por tipo de arquivo', '',
+        *['- '+text(ext)+': '+str(count)+' arquivo(s) lido(s).' for ext, count in sorted(coverage.get('by_extension', {}).items())],
+        *['- Ignorados — '+text(reason)+': '+str(count)+'.' for reason, count in sorted(coverage.get('skipped_reasons', {}).items())],
+        '- Diretórios excluídos sem percorrer conteúdo: '+str(coverage.get('excluded_directories', 0))+'.',
+        'Arquivos lidos não significam cobertura semântica completa. Os arquivos dentro de diretórios excluídos não entram na contagem de ignorados.', '',
+        *['- Código sem suporte: '+text(ext)+' ('+str(count)+' arquivos).' for ext, count in sorted(coverage.get('unsupported_source', {}).items())], '']
+    out[4:4] = coverage_section
     verdict = report.get('verdict')
     if verdict:
         section = ['## Veredito', '', '**'+text(verdict['label'])+'**', '',

@@ -102,10 +102,14 @@ INDICATORS = {
 def analyze_file(text, rel, make):
     findings=[]
     is_code=rel.endswith(('.py','.js','.jsx','.ts','.tsx'))
+    if rel.endswith(('.js','.jsx','.ts','.tsx')):
+        from .storage import analyze
+        findings.extend(analyze(text, rel, make))
     if is_code:
         for n,line in enumerate(text.splitlines(),1):
             if line.lstrip().startswith(('#','//','*')): continue
             for rule,pattern in PATTERNS:
+                if rule == 'RS209': continue
                 if re.search(pattern,line): findings.append(make(rule,rel,n,line.strip()))
         if rel.endswith('.py'):
             try: tree=ast.parse(text)
@@ -179,3 +183,4 @@ def controls(findings, indicators, endpoints):
             findings=counts.get(category,0),evidence=refs,validation=validation,
             assurance='Não validado em runtime. Nenhum estado significa aprovado.'))
     return rows
+

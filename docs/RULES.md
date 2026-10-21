@@ -55,3 +55,17 @@ o contrato OpenAPI, não o comportamento real. RS300 compara status com expectat
 explícitas. RS301–306 observam cabeçalhos da resposta e ainda exigem contexto.
 Cookies Python são inspecionados por AST; expressões dinâmicas e **kwargs permanecem
 não resolvidos. O catálogo não inclui auditoria de CVEs nem scanners externos.
+
+
+## Regras .NET adicionadas na v0.4
+
+| Regra | Severidade | Evidência local |
+| --- | --- | --- |
+| RS400 | Média | CORS permite qualquer origem |
+| RS401 | Alta | Validação JWT explicitamente desativada |
+| RS402 | Alta | Bypass de certificado TLS |
+| RS403 | Alta | Possível segredo literal em configuração |
+
+São hipóteses estáticas. Controllers e Minimal APIs também utilizam RS100/101/102
+para revisão de autenticação/autorização. RS209 inclui constantes locais e indícios
+nos argumentos de setItem. Confira os limites no README.

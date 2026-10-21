@@ -4,7 +4,7 @@
 FastAPI e CLI. Inventaria endpoints, procura padrões de risco e oferece revisão
 consultiva opcional com **Claude CLI ou Codex CLI**.
 
-> Versão 0.3.0 · Auditoria assistida de segurança. Resultados são hipóteses com evidências, não
+> Versão 0.4.0 · Auditoria assistida de segurança. Resultados são hipóteses com evidências, não
 > vulnerabilidades confirmadas. Não substitui revisão humana ou testes de segurança.
 
 ## Um comando → plano de ajustes em Markdown
@@ -74,7 +74,7 @@ Para experimentar a fixture insegura: `reposhield serve --root .` e analise
 - Evidências com localização, confiança e recomendação.
 - Inventário FastAPI/Flask por AST, herança local de dependências/prefixos, Express por padrões e OpenAPI 3 JSON.
 - Revisão de autenticação aparente, rotas administrativas e autorização por objeto.
-- 42 regras: senhas, JWT, cookies, login, recuperação, injeções, SSRF, arquivos, CORS e outros.
+- 46 regras: senhas, JWT, cookies, login, recuperação, injeções, SSRF, arquivos, CORS e outros.
 - Histórico local em SQLite e exportações JSON, Markdown e SARIF 2.1.0.
 - Jobs em background, uma análise por vez e revisão opcional por IA.
 - Exclusões, `.gitignore`, limites de arquivos, tamanho e bytes.
@@ -316,3 +316,53 @@ RS209 agora identifica arquivos de teste (`*.spec.*`, `*.test.*`, `test_*.py`, d
 A evidência é preservada com contexto, sem afirmar uma vulnerabilidade de produção. Ainda exige conferir
 o armazenamento real; possíveis segredos em testes nunca são suprimidos. O texto de risco de RS209
 passa a explicar acesso por JavaScript/XSS, em vez de confundir armazenamento com validação de JWT.
+
+## Análise local de Angular e .NET (v0.4)
+
+```bash
+reposhield scan /caminho/hidrocalc-front --gate
+reposhield scan /caminho/hidrocalc-back --gate
+```
+
+Esses comandos não iniciam HTTP, OSV ou CLI de IA. O status pode continuar INCONCLUSIVO:
+a alteração aumenta a cobertura estática, não transforma ausência de achados em aprovação.
+O código 3 com `--gate` indica pendências, não falha de gravação do relatório.
+
+### RS209 — chaves indiretas
+
+Detecta chamadas multilinha a localStorage/sessionStorage.setItem com:
+- Chave literal sensível (`"token"`, `"jwt"`, `"session"`).
+- Constante local simples, por exemplo `const KEY = "app:token"`.
+- Indício no identificador, como `TOKEN_KEY`, `this.tokenKey` ou `response.token`.
+
+O caso `localStorage.setItem(TOKEN_KEY, response.token)` é detectado no arquivo de
+produção, com a linha da chamada, preservando separadamente a evidência do teste.
+Comentários e strings que apenas descrevem chamadas não são tratados como sinks.
+São indícios, não análise de fluxo completa: imports, aliases de storage, wrappers,
+computed properties, concatenações e sombreamento de variáveis não são resolvidos.
+
+### C#/.NET
+
+Arquivos `.cs`, `.csproj`, `.props` e `.targets` passam a ser lidos. `bin`, `obj` e `.vs`
+são excluídos como diretórios gerados. JSON, incluindo appsettings, já é lido.
+
+- Inventário heurístico de controllers com atributos HttpGet/Post/etc., Route,
+  Authorize (inclusive Roles/Policy) e AllowAnonymous.
+- Minimal APIs MapGet/Post/etc. e indícios locais de RequireAuthorization/AllowAnonymous.
+- RS400: AllowAnyOrigin e SetIsOriginAllowed com lambda literal true.
+- RS401: propriedades de validação JWT explicitamente false.
+- RS402: callbacks conhecidos que aceitam certificados TLS indiscriminadamente.
+- RS403: possíveis segredos em JSON e senhas em connection strings, com evidência redigida.
+
+Não compila o projeto, não executa dotnet e não usa Roslyn. Não resolve atributos
+multilinha complexos, raw strings C#, namespaces de atributos, herança, filtros globais,
+fallback policies, MapGroup, extensões, preprocessor ou rotas convencionais. Um atributo
+Authorize é apenas indício; não comprova proteção efetiva. Dependências NuGet não são
+auditadas pelo módulo OSV npm.
+
+### Cobertura explícita
+
+Markdown, JSON e painel mostram arquivos lidos por extensão, motivos de exclusão,
+diretórios excluídos e fontes conhecidas sem analisador (como VB, Java, Go, PHP, Vue).
+Arquivos dentro de diretórios excluídos não são percorridos nem contabilizados como
+arquivos ignorados. Fontes não suportadas identificadas impedem aprovação do gate.

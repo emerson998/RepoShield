@@ -25,6 +25,8 @@ def evaluate(report):
     gaps = []
     if report['coverage']['partial'] or report.get('errors'):
         gaps.append('Análise incompleta ou com erros; resolva as etapas indicadas no relatório.')
+    if report['coverage'].get('unsupported_source'):
+        gaps.append('Código sem analisador: '+', '.join(sorted(report['coverage']['unsupported_source']))+'. Esses arquivos não foram avaliados.')
     if not report['coverage']['files']:
         gaps.append('Nenhum arquivo suportado foi analisado.')
     if not results:
