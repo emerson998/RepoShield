@@ -2,7 +2,7 @@
 import json
 import os
 import re
-from urllib.parse import unquote
+from urllib.parse import unquote, urljoin
 
 from .base import external_finding, severity_from
 
@@ -53,8 +53,32 @@ def _location(uri, root):
     return '(externo)/' + path.rsplit('/', 1)[-1]
 
 
+def _artifact_uri(location, run):
+    """Resolve artifact index and uriBaseId without accessing disk or network."""
+    artifact = dict(_dict(location))
+    artifacts = _list(run.get('artifacts'))
+    index = artifact.get('index')
+    if isinstance(index, int) and not isinstance(index, bool) and 0 <= index < len(artifacts):
+        artifact = {**_dict(_dict(artifacts[index]).get('location')), **artifact}
+    uri = artifact.get('uri')
+    if not isinstance(uri, str):
+        return ''
+    bases = _dict(run.get('originalUriBaseIds'))
+    seen = set()
+    base_id = artifact.get('uriBaseId')
+    while isinstance(base_id, str) and base_id not in seen:
+        seen.add(base_id)
+        base = _dict(bases.get(base_id))
+        prefix = base.get('uri')
+        if not isinstance(prefix, str):
+            break
+        uri = urljoin(prefix, uri)
+        base_id = base.get('uriBaseId')
+    return uri
+
+
 def _skip(result):
-    """Ignora pass/notApplicable. Suprimidos na origem continuam como finding (ver disposition)."""
+    """Ignora pass/notApplicable. Supressões aceitas na origem continuam listadas."""
     return result.get('kind') in ('pass', 'notApplicable')
 
 
@@ -77,6 +101,8 @@ def import_sarif(text, *, default_tool='sarif', root=None, extra=None):
     findings = []
     for run in runs:
         run = _dict(run)
+        if any(inv.get('executionSuccessful') is False for inv in _dicts(run.get('invocations'))):
+            raise ValueError('SARIF registra execução incompleta da ferramenta de origem')
         driver = _dict(_dict(run.get('tool')).get('driver'))
         tool = re.sub(r'[^a-z0-9._-]', '', str(driver.get('name') or '').lower()) or default_tool
         version = str(driver.get('version') or driver.get('semanticVersion') or 'unknown')
@@ -99,7 +125,9 @@ def import_sarif(text, *, default_tool='sarif', root=None, extra=None):
             level = result.get('level') or _dict(rule.get('defaultConfiguration')).get('level')
             tags = _strings(props_rule.get('tags')) + _strings(props_result.get('tags'))
 
-            if 'gitleaks' in tool or 'secret' in rule_id.lower() or any('secret' in tag.lower() for tag in tags):
+            if props_result.get('category') in {'secrets', 'dependencies', 'sast', 'iac', 'runtime'}:
+                category = props_result['category']
+            elif 'gitleaks' in tool or 'secret' in rule_id.lower() or any('secret' in tag.lower() for tag in tags):
                 category = 'secrets'
             elif ('osv' in tool or 'trivy' in tool) and re.search(r'(?i)cve-\d|ghsa-', rule_id):
                 category = 'dependencies'
@@ -115,7 +143,7 @@ def import_sarif(text, *, default_tool='sarif', root=None, extra=None):
                     evidence = f'{evidence} | {note}' if evidence else note
 
             physical = _dict(_dict(next(iter(_dicts(result.get('locations'))), {})).get('physicalLocation'))
-            uri = _dict(physical.get('artifactLocation')).get('uri')
+            uri = _artifact_uri(physical.get('artifactLocation'), run)
             line = _dict(physical.get('region')).get('startLine')
 
             title = _dict(rule.get('shortDescription')).get('text') or rule.get('name') or rule_id
@@ -124,13 +152,16 @@ def import_sarif(text, *, default_tool='sarif', root=None, extra=None):
             if isinstance(help_text, str) and help_text.strip():
                 kwargs['recommendation'] = help_text.strip()[:500]
 
+            severity = severity_from(level if isinstance(level, str) else None, score)
+            if tool == 'reposhield' and props_result.get('reposhieldSeverity') in ('critical', 'high', 'medium', 'low'):
+                severity = props_result['reposhieldSeverity']
             item = external_finding(
                 tool=tool, version=version, rule_id=rule_id,
-                severity=severity_from(level if isinstance(level, str) else None, score),
+                severity=severity,
                 title=str(title)[:200], file=_location(uri, root), line=line, evidence=evidence,
                 category=category, cwe=_cwe(tags), **kwargs)
-            # Suppressed in the source tool (any status but 'rejected'): kept, marked, and flagged so assurance.classify respects it.
-            active = [s for s in _dicts(result.get('suppressions')) if s.get('status') != 'rejected']
+            # Pending or unspecified review must never remove a finding from the gate.
+            active = [s for s in _dicts(result.get('suppressions')) if s.get('status') == 'accepted']
             if active:
                 just = active[0].get('justification')
                 item.update(disposition='suppressed', source_suppressed=True, suppressed_by=dict(

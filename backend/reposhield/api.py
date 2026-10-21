@@ -36,6 +36,7 @@ class ScanRequest(BaseModel):
     provider: str='none'
     consent: bool=False
     runtime: bool=False
+    performance: bool=True
     dependencies: bool=False
     tools: list[str]=Field(default_factory=list)
     allow_downloads: bool=False
@@ -49,9 +50,9 @@ def settings(): return {'root':str(ROOT),'providers':available()}
 @app.get('/api/scans',dependencies=[Depends(auth)])
 def history(): return store.history()
 
-def work(identifier,path,provider,runtime_enabled,dependencies_enabled=False,tools=None,allow_downloads=False):
+def work(identifier,path,provider,runtime_enabled,dependencies_enabled=False,tools=None,allow_downloads=False,performance_enabled=True):
     try:
-        report=scan(path,runtime_enabled=runtime_enabled,dependencies_enabled=dependencies_enabled,tools=tools,allow_downloads=allow_downloads)
+        report=scan(path,runtime_enabled=runtime_enabled,dependencies_enabled=dependencies_enabled,tools=tools,allow_downloads=allow_downloads,performance_enabled=performance_enabled)
         if provider!='none':
             try: report['ai']=review(report,provider)
             except ValueError as exc: report['errors'].append(str(exc))
@@ -78,7 +79,7 @@ def create(req: ScanRequest):
         identifier=uuid.uuid4().hex
         jobs.clear()
         jobs[identifier]={'status':'running'}
-    pool.submit(work,identifier,path,req.provider,req.runtime,req.dependencies,tools,req.allow_downloads)
+    pool.submit(work,identifier,path,req.provider,req.runtime,req.dependencies,tools,req.allow_downloads,req.performance)
     return {'id':identifier,'status':'running'}
 
 @app.get('/api/scans/{identifier}',dependencies=[Depends(auth)])

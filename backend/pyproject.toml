@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 [project]
 name = "reposhield"
-version = "0.7.0"
+version = "0.9.0"
 description = "Local-first security triage for development teams"
 requires-python = ">=3.11"
 dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "pathspec>=0.12,<1"]

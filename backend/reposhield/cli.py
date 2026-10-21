@@ -18,7 +18,7 @@ def tool_set(value):
     return names
 
 def main():
-    parser=argparse.ArgumentParser(description='RepoShield • análise local de segurança')
+    parser=argparse.ArgumentParser(description='RepoShield • análise local de segurança e performance')
     sub=parser.add_subparsers(dest='command',required=True)
     s=sub.add_parser('scan'); s.add_argument('path',nargs='?',default='.')
     s.add_argument('--provider',choices=['none','claude','codex'],default='none')
@@ -33,6 +33,9 @@ def main():
     s.add_argument('--allow-downloads',action='store_true',help='Autoriza ferramentas que baixam regras/bases (ex.: Trivy); não envia código do projeto')
     s.add_argument('--baseline',type=Path,help='Relatório JSON de scan anterior; achados já existentes não bloqueiam')
     s.add_argument('--diff-base',help='Ref git base; analisa apenas as linhas alteradas em relação a ela')
+    s.add_argument('--no-performance',action='store_true',help='Desativa as heurísticas locais de performance')
+    s.add_argument('--query-plan',dest='query_plans',action='append',type=Path,default=[],help='Importa EXPLAIN JSON PostgreSQL, sem executar SQL (repetível)')
+    s.add_argument('--performance-fail-on',choices=['low','medium','high'],help='Limiar CI separado para prioridade de performance; não altera o veredito de segurança')
     s.add_argument('--gate',action='store_true',help='Retorna 1 se reprovado e 3 se inconclusivo; 0 para aprovação no escopo ou no diff (passed_diff)')
     s.add_argument('--fail-on',choices=['low','medium','high','critical'])
     serve=sub.add_parser('serve'); serve.add_argument('--root',default='.')
@@ -46,12 +49,15 @@ def main():
         return
     if args.provider!='none' and not args.consent: parser.error('Use --consent para enviar os achados ao provedor.')
     if args.stdout and args.output: parser.error('Escolha --stdout ou --output.')
+    if args.no_performance and (args.query_plans or args.performance_fail_on):
+        parser.error('--query-plan e --performance-fail-on exigem performance habilitada.')
     provider_failed=False
     try:
         print('Analisando o projeto…',file=sys.stderr)
         report=scan(args.path,runtime_enabled=args.runtime,dependencies_enabled=args.dependencies,
                     tools=args.tools,imports=args.imports or (),allow_downloads=args.allow_downloads,
-                    baseline=args.baseline,diff_base=args.diff_base)
+                    baseline=args.baseline,diff_base=args.diff_base,
+                    performance_enabled=not args.no_performance,query_plans=args.query_plans)
         if args.provider!='none':
             from .providers import review
             try: report['ai']=review(report,args.provider)
@@ -68,7 +74,11 @@ def main():
             destination.parent.mkdir(parents=True,exist_ok=True)
             destination.write_text(result,encoding='utf-8')
             print('Relatório salvo: '+str(destination.resolve()),file=sys.stderr)
-        if provider_failed: raise SystemExit(2)
+        if provider_failed or (report.get('performance') or {}).get('errors'): raise SystemExit(2)
+        if args.performance_fail_on:
+            levels_perf={'low':0,'medium':1,'high':2}
+            if any(levels_perf[f['priority']]>=levels_perf[args.performance_fail_on] for f in (report.get('performance') or {}).get('findings', [])):
+                raise SystemExit(1)
         if args.gate and report['verdict']['status']=='rejected': raise SystemExit(1)
         levels={'low':0,'medium':1,'high':2,'critical':3}
         if args.fail_on and any(levels[f['severity']]>=levels[args.fail_on] for f in report['findings']): raise SystemExit(1)

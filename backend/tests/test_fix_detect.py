@@ -213,7 +213,7 @@ def sarif_result(message='msg', **extra):
 
 
 def test_sarif_suppressed_in_source_is_kept_and_marked():
-    doc = sarif_doc([sarif_result(suppressions=[{'kind': 'external', 'status': 'underReview',
+    doc = sarif_doc([sarif_result(suppressions=[{'kind': 'external', 'status': 'accepted',
                                                   'justification': 'Falso positivo confirmado'}])])
     [item] = sarif.import_sarif(doc)
     assert item['disposition'] == 'suppressed' and item['source_suppressed'] is True

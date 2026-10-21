@@ -342,3 +342,55 @@ def test_run_adapters_with_consent_executes_osv(monkeypatch, tmp_path):
     assert out['tools'][0]['status'] == 'executed'
     assert out['dependencies']['status'] == 'failed'
     assert out['dependencies']['packages'] == 3
+
+
+@pytest.mark.parametrize('status', ['underReview', 'rejected', 'unknown', None])
+def test_unapproved_sarif_suppression_still_counts(status):
+    suppression = {'kind': 'external'}
+    if status is not None:
+        suppression['status'] = status
+    [item] = sarif.import_sarif(sarif_doc([sarif_result(suppressions=[suppression])]))
+    assert not item.get('source_suppressed')
+    assert item.get('disposition') != 'suppressed'
+
+
+def test_sarif_resolves_artifact_index_and_nested_uri_bases(tmp_path):
+    data = json.loads(sarif_doc([sarif_result()]))
+    run = data['runs'][0]
+    run['originalUriBaseIds'] = {
+        'ROOT': {'uri': tmp_path.as_uri() + '/'},
+        'SRC': {'uri': 'src/', 'uriBaseId': 'ROOT'},
+    }
+    run['artifacts'] = [{'location': {'uri': 'a%20b.cs', 'uriBaseId': 'SRC'}}]
+    run['results'][0]['locations'][0]['physicalLocation']['artifactLocation'] = {'index': 0}
+    [item] = sarif.import_sarif(json.dumps(data), root=tmp_path)
+    assert item['file'] == 'src/a b.cs'
+
+
+def test_sarif_cyclic_uri_base_is_bounded():
+    data = json.loads(sarif_doc([sarif_result()]))
+    run = data['runs'][0]
+    run['originalUriBaseIds'] = {'A': {'uri': 'src/', 'uriBaseId': 'A'}}
+    run['results'][0]['locations'][0]['physicalLocation']['artifactLocation']['uriBaseId'] = 'A'
+    assert sarif.import_sarif(json.dumps(data))[0]['file'] == 'src/src/a.cs'
+
+
+def test_sarif_failed_invocation_cannot_be_imported_as_complete():
+    data = json.loads(sarif_doc([]))
+    data['runs'][0]['invocations'] = [{'executionSuccessful': False}]
+    with pytest.raises(ValueError, match='execução incompleta'):
+        sarif.import_sarif(json.dumps(data))
+
+
+@pytest.mark.parametrize('severity', ['critical', 'high', 'medium', 'low'])
+def test_reposhield_sarif_roundtrip_preserves_severity_cwe_and_suppression(severity):
+    from reposhield.scanner import sarif as export_sarif
+    original = finding('RS001', 'src/config.py', 3, 'synthetic evidence')
+    original.update(severity=severity, disposition='suppressed',
+                    suppressed_by={'justification': 'Revisado pela equipe.'})
+    exported = export_sarif({'findings': [original]})
+    [item] = sarif.import_sarif(json.dumps(exported))
+    assert item['severity'] == severity
+    assert item['cwe'] == original['cwe']
+    assert item['disposition'] == 'suppressed'
+    assert item['category'] == 'secrets'
