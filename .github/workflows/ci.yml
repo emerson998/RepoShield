@@ -13,10 +13,13 @@ jobs:
       - run: pip install -e './backend[dev]'
       - run: pytest backend/tests -q
       - run: python -m reposhield.cli scan examples --format sarif --output results.sarif
+      - run: python -m reposhield.cli scan examples/performance --query-plan examples/performance/postgresql-plan.json --format json --output performance-report.json
       - uses: actions/upload-artifact@v4
         with:
           name: security-report
-          path: results.sarif
+          path: |
+            results.sarif
+            performance-report.json
   frontend:
     runs-on: ubuntu-latest
     defaults:

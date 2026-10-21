@@ -1,10 +1,10 @@
 # 🛡️ RepoShield
 
-**Segurança começa no código.** Workspace local de triagem de segurança com React,
+**Segurança começa no código.** Workspace local de triagem de segurança e performance com React,
 FastAPI e CLI. Inventaria endpoints, procura padrões de risco e oferece revisão
 consultiva opcional com **Claude CLI ou Codex CLI**.
 
-> Versão 0.8.0 · Auditoria assistida de segurança. Resultados são hipóteses com evidências, não
+> Versão 0.9.0 · Auditoria assistida de segurança. Resultados são hipóteses com evidências, não
 > vulnerabilidades confirmadas. Não substitui revisão humana ou testes de segurança.
 
 ## Um comando → plano de ajustes em Markdown
@@ -43,6 +43,23 @@ reposhield scan . --stdout  # saída no terminal, sem arquivo automático
 Se a IA falhar, o relatório estático ainda é salvo, registra a etapa incompleta e
 o comando retorna código 2. Achados que atingem `--fail-on` também preservam o
 arquivo antes de retornar código 1. Um exemplo está em [docs/EXAMPLE_REPORT.md](docs/EXAMPLE_REPORT.md).
+
+## Performance de queries e acesso a dados
+
+O scan também procura indícios de N+1, consultas EF sem limite, materialização antes
+de filtros, I/O bloqueante em async e padrões SQL que merecem revisão. A aba
+**Performance** e o relatório mostram evidência, prioridade, recomendação e como medir.
+Indícios de performance ficam separados do veredito de segurança.
+
+```bash
+reposhield scan . --performance-fail-on high  # limiar CI opcional de performance
+reposhield scan . --query-plan ./plan.json   # EXPLAIN JSON PostgreSQL já coletado
+reposhield scan . --no-performance           # somente segurança
+```
+
+A ferramenta não conecta ao banco, não executa SQL e não promete ganhos sem medição.
+Planos importados podem indicar cardinalidade divergente, disco temporário e loops
+excessivos. Veja o [catálogo e limites](docs/PERFORMANCE.md) e um [relatório de exemplo](docs/PERFORMANCE_EXAMPLE.md).
 
 ## Começar
 
@@ -162,6 +179,7 @@ backend/reposhield/
   adapters/               Ferramentas externas opcionais e importação SARIF
   java.py                 Heurística Java/Spring
   triage.py               Supressões, linha de base e modo diff
+  performance.py          Queries/ORM, I/O assíncrono e planos PostgreSQL offline
 backend/tests/            Casos de scanner, API e adaptadores
 examples/                 Fixture sintética de demonstração
 ```

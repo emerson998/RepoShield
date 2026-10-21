@@ -113,6 +113,27 @@ def triage_block(triage):
         out += ['**Avisos de triagem:**', *['- '+text(w) for w in warnings], '']
     return out
 
+def performance_block(perf):
+    if not perf: return []
+    out = ['## Performance — queries e acesso a dados', '',
+           'Estado: '+text(perf['status'])+'. Não altera o veredito de segurança.', '',
+           text(perf['scope']), '',
+           f"Arquivos examinados: {perf['coverage']['files']}. Cobertura parcial: {perf['coverage']['partial']}.", '']
+    for plan in perf.get('plans', []):
+        out += [f"- Plano {text(plan['file'])}: {plan['nodes']} nós; métricas reais fornecidas: {plan['actual_metrics']}."]
+    for f in perf['findings']:
+        out += ['', f"### {text(f['rule'])} · {text(f['priority'].upper())} · {text(f['title'])}", '',
+                f"- Local: {text(f['file'])}:{f['line']}" + (f" · nó {f['plan_node']}" if f.get('plan_node') else ''),
+                f"- Estado: {text(f['status'])} · Confiança: {text(f['confidence'])}.", '',
+                '> '+text(f['evidence']), '', '**Impacto provável**', '', text(f['impact']), '', '**Como investigar e ajustar**', '', text(f['recommendation']), '',
+                '**Como medir e validar**', '', text(f['validation']), '']
+    if not perf['findings']:
+        out += ['Nenhum indício reportado; isso não certifica performance.', '']
+    out += ['### Limites de performance', '', *['- '+text(x) for x in perf['limitations']], '',
+            *['- Erro: '+text(x) for x in perf.get('errors', [])], '']
+    return out
+
+
 def markdown(report):
     findings=report['findings'];coverage=report['coverage']
     pending=[f for f in findings if not is_non_blocking(f)]
@@ -173,6 +194,7 @@ def markdown(report):
                 *['- '+dependency_line(v) for v in deps['vulnerabilities']],
                 *['- '+text(e) for e in deps['errors']],
                 *['- Aviso: '+text(w) for w in deps.get('warnings', [])], '']
+    out += performance_block(report.get('performance'))
     if report.get('ai'):
         out += ['## Revisão consultiva por IA','', 'Sugestões adicionais; não substituem a confirmação dos achados.','']
         out += ['> '+text(line) for line in report['ai']['text'].splitlines()]

@@ -12,7 +12,7 @@ from . import __version__, assurance, dotnet
 from . import audit
 from . import runtime
 from . import java
-from . import triage
+from . import triage, performance
 from .adapters import ADAPTERS, NAMES
 from .adapters import base as adapter_base
 from .adapters.sarif import import_sarif
@@ -21,7 +21,7 @@ from .syntax import clean, placeholder
 
 EXCLUDED = {'.git', '.venv', 'venv', 'node_modules', 'dist', 'build', '__pycache__', '.next', '.reposhield', 'bin', 'obj', '.vs'}
 EXTENSIONS = {'.py', '.js', '.jsx', '.ts', '.tsx', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.env', '.cs', '.csproj', '.props', '.targets',
-              '.java', '.properties', '.xml'}
+              '.java', '.properties', '.xml', '.sql'}
 RULES = {
  'RS001': ('high', 'Possível segredo no código', 'Remova o valor do código, revogue a credencial e use um gerenciador de segredos.'),
  'RS002': ('high', 'TLS sem verificação de certificado', 'Ative a validação do certificado e configure uma CA confiável.'),
@@ -78,7 +78,9 @@ def finding(rule, file, line, evidence, confidence='medium'):
                 recommendation=recommendation, **meta)
 
 def scan(project, *, runtime_enabled=False, dependencies_enabled=False, tools=None, imports=(), allow_downloads=False,
-         baseline=None, diff_base=None, today=None):
+         baseline=None, diff_base=None, today=None, performance_enabled=True, query_plans=()):
+    if query_plans and not performance_enabled:
+        raise ValueError('Importação de planos exige análise de performance habilitada.')
     root = Path(project).expanduser().resolve()
     if not root.is_dir(): raise ValueError('Diretório do projeto não existe.')
     if tools is not None:
@@ -101,6 +103,8 @@ def scan(project, *, runtime_enabled=False, dependencies_enabled=False, tools=No
     spec = pathspec.PathSpec.from_lines('gitwildmatch', patterns)
     findings, endpoints, errors = [], [], []
     indicators = {}
+    perf_findings, perf_files = [], 0
+    perf_errors, perf_plans = [], []
     by_extension, skipped_reasons, unsupported_source = {}, {}, {}
     excluded_directories = 0
     scanned, skipped, total = 0, 0, 0
@@ -132,6 +136,9 @@ def scan(project, *, runtime_enabled=False, dependencies_enabled=False, tools=No
                 errors.append(f'{rel}: leitura indisponível'); partial = True; continue
             scanned += 1; total += size
             by_extension[path.suffix or path.name] = by_extension.get(path.suffix or path.name, 0)+1
+            if performance_enabled and path.suffix in {'.cs', '.py', '.js', '.jsx', '.ts', '.tsx', '.java', '.sql'}:
+                perf_files += 1
+                perf_findings.extend(performance.analyze(text, rel))
             code_text = clean(text) if path.suffix == '.cs' else text
             for number, line in enumerate(code_text.splitlines(),1):
                 # Placeholders such as <senha>, ${VAR} or changeme are documentation, not secrets.
@@ -288,9 +295,20 @@ def scan(project, *, runtime_enabled=False, dependencies_enabled=False, tools=No
         if changed is None:
             raise ValueError('Não foi possível calcular o diff contra ' + diff_base + '.')
         findings = triage.apply_diff(findings, changed)
+        perf_findings = triage.apply_diff(perf_findings, changed)
         diff_report = dict(base=diff_base, note=triage.diff_scope_note(diff_base), files=len(changed))
+    for plan_path in query_plans:
+        try:
+            observations, metadata = performance.read_plan(plan_path)
+            perf_findings.extend(observations)
+            perf_plans.append(metadata)
+        except (OSError, ValueError) as exc:
+            perf_errors.append(f'Plano {Path(plan_path).name}: {exc}')
+    perf_report = performance.report(perf_findings, perf_files, enabled=performance_enabled,
+                                     partial=partial if performance_enabled else False, errors=perf_errors,
+                                     plans=perf_plans, diff=diff_report)
     triage_report = dict(suppressed=suppressed, baseline=baseline_report, diff=diff_report, warnings=triage_warnings)
-    report = dict(version=3,runtime=runtime_report,engine_version=__version__,controls=checklist,summary=dict(
+    report = dict(version=4,performance=perf_report,runtime=runtime_report,engine_version=__version__,controls=checklist,summary=dict(
         rules=len(RULES),controls=len(checklist),findings=len(findings),
         requires_manual=sum(c['status']=='manual_required' for c in checklist)),created_at=datetime.now(timezone.utc).isoformat(),project=root.name,
         findings=findings,endpoints=endpoints,coverage=dict(files=scanned,skipped=skipped,bytes=total,partial=partial,by_extension=by_extension,skipped_reasons=skipped_reasons,excluded_directories=excluded_directories,unsupported_source=unsupported_source),
@@ -329,7 +347,7 @@ def _sarif_result(f):
 
 def sarif(report):
     return {'version':'2.1.0','$schema':'https://json.schemastore.org/sarif-2.1.0.json','runs':[{
-        'properties':{'verdict':report.get('verdict'),'dependencies':report.get('dependencies'),'tools':report.get('tools')},
+        'properties':{'verdict':report.get('verdict'),'dependencies':report.get('dependencies'),'tools':report.get('tools'),'performance':report.get('performance')},
         'tool':{'driver':{'name':'RepoShield','version':__version__,'rules':[{'id':k,'shortDescription':{'text':v[1]},'help':{'text':v[2]}} for k,v in RULES.items()]}},
         'results':[_sarif_result(f) for f in report['findings']]}]}
 
