@@ -4,7 +4,7 @@
 FastAPI e CLI. Inventaria endpoints, procura padrões de risco e oferece revisão
 consultiva opcional com **Claude CLI ou Codex CLI**.
 
-> Versão 0.4.0 · Auditoria assistida de segurança. Resultados são hipóteses com evidências, não
+> Versão 0.8.0 · Auditoria assistida de segurança. Resultados são hipóteses com evidências, não
 > vulnerabilidades confirmadas. Não substitui revisão humana ou testes de segurança.
 
 ## Um comando → plano de ajustes em Markdown
@@ -214,6 +214,19 @@ reposhield scan . --import resultados.sarif     # importa SARIF de outra ferrame
 Ferramenta ausente nunca aprova: aparece como não instalada e, se pedida explicitamente, deixa o veredito inconclusivo.
 Com `auto`, ferramentas ausentes geram apenas aviso. A seção "Ferramentas executadas" do relatório
 mostra versão, eixo, uso de rede e situação de cada uma.
+
+### Confiabilidade da triagem (v0.8)
+
+- A linha de base preserva números, maiúsculas/minúsculas, regra, severidade e alcance.
+  Mudanças nesses campos voltam à revisão, mesmo que a linha não mude.
+- Relatórios antigos têm suas chaves recalculadas ao carregar a linha de base.
+  Supressões por `stable_key` de versões anteriores precisam ser revisadas e atualizadas;
+  chaves sem correspondência geram aviso, sem suprimir o achado.
+- Somente supressões SARIF com `status: accepted` deixam de bloquear. Estados pendentes,
+  rejeitados ou ausentes continuam exigindo revisão.
+- SARIF com execução explicitamente malsucedida é registrado como falha de importação.
+- O importador resolve índices de artefatos e bases de URI sem acessar rede ou arquivos.
+- Exportação e reimportação preservam severidade, CWE e categorias reconhecidas.
 
 ### Linha de base e modo diff
 

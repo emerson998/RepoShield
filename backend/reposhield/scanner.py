@@ -317,10 +317,12 @@ def scan(project, *, runtime_enabled=False, dependencies_enabled=False, tools=No
 def _sarif_result(f):
     result = {'ruleId':f['rule'],'level':'error' if f['severity'] in {'critical','high'} else 'warning',
         'message':{'text':f['title']+' — '+f['recommendation']},
-        'properties':{'confidence':f['confidence'],'category':f.get('category'),'cwe':f.get('cwe')},
+        'properties':{'confidence':f['confidence'],'category':f.get('category'),'cwe':f.get('cwe'),
+            'reposhieldSeverity':f['severity'],
+            'tags':[f['cwe']] if f.get('cwe') else []},
         'locations':[{'physicalLocation':{'artifactLocation':{'uri':__import__('urllib.parse',fromlist=['quote']).quote(f['file'])},'region':{'startLine':f['line']}}}]}
     if f.get('disposition') == 'suppressed':
-        result['suppressions'] = [{'kind':'external','justification':(f.get('suppressed_by') or {}).get('justification','')}]
+        result['suppressions'] = [{'kind':'external','status':'accepted','justification':(f.get('suppressed_by') or {}).get('justification','')}]
     if f.get('baseline') in ('existing', 'new'):
         result['baselineState'] = 'unchanged' if f['baseline'] == 'existing' else 'new'
     return result

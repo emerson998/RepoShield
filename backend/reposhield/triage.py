@@ -17,12 +17,13 @@ _BASELINE_ERROR = 'Linha de base inválida: use o relatório JSON de um scan ant
 
 
 def _norm(evidence):
-    text = re.sub(r'\s+', ' ', str(evidence or '').lower()).strip()
-    return re.sub(r'\d+', '#', text)[:200]
+    return re.sub(r'\s+', ' ', str(evidence or '')).strip()
 
 
 def _group_key(finding):
-    return (str(finding.get('file') or ''), str(finding.get('cwe') or finding.get('rule') or ''), _norm(finding.get('evidence')))
+    return (str(finding.get('file') or ''), str(finding.get('rule') or ''),
+            str(finding.get('severity') or ''), str(finding.get('reachability') or ''),
+            _norm(finding.get('evidence')))
 
 
 def _line(finding):
@@ -34,8 +35,8 @@ def _line(finding):
 
 def stable_key(finding, occurrence):
     """Chave que sobrevive a mudança de linha: não depende do número da linha."""
-    file, cwe_or_rule, norm = _group_key(finding)
-    return hashlib.sha256(f'{file}|{cwe_or_rule}|{norm}|{occurrence}'.encode()).hexdigest()[:16]
+    payload = json.dumps([2, *_group_key(finding), occurrence], ensure_ascii=False)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
 
 def assign_keys(findings):
@@ -156,8 +157,8 @@ def load_baseline(text):
     if not isinstance(data, dict) or not isinstance(data.get('findings'), list):
         raise ValueError(_BASELINE_ERROR)
     copies = [dict(f) for f in data['findings'] if isinstance(f, dict)]
-    if any(not f.get('stable_key') for f in copies):
-        assign_keys(copies)
+    # Recalcula inclusive relatórios antigos: chaves v1 perdiam números, caixa e regra.
+    assign_keys(copies)
     return {f['stable_key'] for f in copies if f.get('stable_key')}
 
 

@@ -274,3 +274,26 @@ def test_apply_diff_without_diff_raises():
 
 def test_diff_scope_note():
     assert diff_scope_note('main') == 'Somente linhas alteradas em relação a main.'
+
+
+@pytest.mark.parametrize('changes', [
+    {'evidence': 'token = "abc456"'},
+    {'evidence': 'token = "ABC123"'},
+    {'evidence': 'x' * 200 + 'different'},
+    {'rule': 'RS999'},
+    {'severity': 'critical'},
+    {'reachability': 'production'},
+])
+def test_stable_key_preserves_security_relevant_changes(changes):
+    original = finding(evidence='x' * 200) if changes.get('evidence', '').startswith('x') else finding()
+    modified = dict(original, **changes)
+    assert stable_key(original, 0) != stable_key(modified, 0)
+
+
+def test_baseline_recalculates_legacy_keys():
+    old = finding(stable_key='old-colliding-key')
+    keys = load_baseline(report(old))
+    assert keys == {stable_key(old, 0)}
+    current = [finding(line=99), finding(evidence='token = "abc456"')]
+    assign_keys(current)
+    assert apply_baseline(current, keys) == {'existing': 1, 'new': 1}
